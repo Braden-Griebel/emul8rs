@@ -1,8 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::Result;
-use anyhow::bail;
+use anyhow::{Context, Result};
 
 const NUM_ROWS: usize = 64;
 const NUM_COLS: usize = 128;
@@ -29,6 +28,7 @@ impl Display {
             .get_mut(row * ROW_STRIDE + col * COL_STRIDE)
             .context("Tried to index past display bounds!")?;
         *el = val;
+        Ok(())
     }
 }
 
