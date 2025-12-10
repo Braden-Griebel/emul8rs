@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ const MAX_STACK_SIZE: usize = 128;
 const NUM_REGISTERS: usize = 16;
 const MILLIS_PER_SECOND: u64 = 1_000;
 const TIMER_HZ: u64 = 60;
+const GAME_MEMORY_START: usize = 0x200;
 
 /// A boolean array representing the state of the display
 pub(crate) struct Display {
@@ -181,5 +183,22 @@ impl Emulator {
             .stack
             .get(self.stack_top)
             .context("Invalid stack pointer")?))
+    }
+
+    /// Read a file, loads into memory starting at position 0x200 (512)
+    fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let contents = std::fs::read(path).context("Failed to read input file")?;
+        let mut memory_index: usize = 0x200;
+
+        // Iterate through the file, moving each byte into memory
+        for byte in contents {
+            *(self
+                .memory
+                .get_mut(memory_index)
+                .context("Insufficient memory to hold game file")?) = byte;
+            memory_index += 1;
+        }
+
+        Ok(())
     }
 }
