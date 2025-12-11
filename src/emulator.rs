@@ -373,6 +373,41 @@ impl Emulator {
         Ok(self.raylib.is_key_down(KEYMAP[key as usize]))
     }
 
+    /// Jump to provided destination
+    fn jump(&mut self, dest: usize) -> Result<()> {
+        self.program_counter = dest;
+        Ok(())
+    }
+
+    /// Get the value in register `register`
+    fn get_reg(&self, register: usize) -> Result<u8> {
+        Ok(self
+            .registers
+            .get(register)
+            .context(format!("Trying to get value at register {register:#x}"))?
+            .to_owned())
+    }
+
+    /// Set the value in register `register` to `value`
+    fn set_reg(&mut self, register: usize, value: u8) -> Result<()> {
+        // Bounds check to indicate panic
+        if register >= NUM_REGISTERS {
+            bail!("Trying to get value at register {register:#x}")
+        }
+        self.registers[register] = value;
+        Ok(())
+    }
+
+    /// Add the value in register `register` to `value`
+    fn add_reg(&mut self, register: usize, value: u8) -> Result<()> {
+        // Bounds check to indicate panic
+        if register >= NUM_REGISTERS {
+            bail!("Trying to get value at register {register:#x}")
+        };
+        self.registers[register] += value;
+        Ok(())
+    }
+
     /// Fetch the current instruction (incrementing the program counter appropriately)
     fn fetch(&mut self) -> Result<(u8, u8)> {
         let b1 = self
@@ -389,7 +424,80 @@ impl Emulator {
         Ok((b1, b2))
     }
 
+    /// Execute a single instruction
     fn execute(&mut self) -> Result<()> {
+        // Gets the instruction, increments the program counter
+        let (instruction_byte1, instruction_byte2) = self.fetch()?;
+
+        // Decode the instruction into various nibbles (half bytes), other values
+        let nib1 = (instruction_byte1 & 0xF0) >> 4; // Used to determine instruction type
+        let nib_x = instruction_byte1 & 0x0F; // Used for register address
+        let nib_y = (instruction_byte2 & 0xF0) >> 4; // Used for register address
+        let nib_n = instruction_byte2 & 0x0F; // 4 bit number
+        // Other bit combinations used, not really nibbles but convienient prefix
+        let nib_nn = (nib_x << 4) | nib_y; // 8-bit immediate number (not index)
+        let nib_nnn: u16 = ((nib_x as u16) << 8) | ((nib_y as u16) << 4) | (nib_n as u16);
+        // Match on the instruction (breaking it down by half-bytes as that
+        // is how instructions are distinguished)
+        let _: () = match (nib1, nib_x, nib_y, nib_n) {
+            // CLEAR
+            (0x0, 0x0, 0xE, 0x0) => {
+                self.display.clear()?;
+                self.display.needs_redraw = true;
+            }
+            // JUMP
+            (0x1, ..) => {
+                self.jump(nib_nnn as usize)?;
+            }
+            // SUBROUTINE
+            (0x2, ..) => {
+                // Push pc onto stack for returning from subrouting
+                self.stack_push(self.program_counter as u16)?;
+                // Jump to destination
+                self.jump(nib_nnn as usize)?;
+            }
+            // RETURN
+            (0x0, 0x0, 0xE, 0xE) => {
+                let dest = self.stack_pop()? as usize;
+                self.jump(dest)?;
+            }
+            // Conditional jumps
+            (0x3, x, ..) => {
+                // If value of register VX is equal to NN, skip next instruction
+                if self.get_reg(x as usize)? == nib_nn {
+                    self.program_counter += INSTRUCTION_LENGTH;
+                }
+            }
+            (0x4, x, ..) => {
+                // If value of register VX is NOT equal to NN, skip next instruction
+                if self.get_reg(x as usize)? != nib_nn {
+                    self.program_counter += INSTRUCTION_LENGTH;
+                }
+            }
+            (0x5, x, y, ..) => {
+                // If value at VX == value at VY, skip next instruction
+                if self.get_reg(x as usize)? == self.get_reg(y as usize)? {
+                    self.program_counter += INSTRUCTION_LENGTH;
+                }
+            }
+            (0x9, x, y, ..) => {
+                // If value at VX != value at VY, skip next instruction
+                if self.get_reg(x as usize)? != self.get_reg(y as usize)? {
+                    self.program_counter += INSTRUCTION_LENGTH;
+                }
+            }
+            // Set Register
+            (0x6, x, ..) => {
+                self.set_reg(x as usize, nib_nn)?;
+            }
+            // Add to register
+            (0x7, x, ..) => {
+                self.add_reg(x as usize, nib_nn)?;
+            }
+            (other, ..) => {
+                bail!("Instruction {other:#x} not implemented")
+            }
+        };
         Ok(())
     }
 }
