@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 // External uses
 use anyhow::{Context, Result, bail};
+use rand::{self, Rng, RngCore};
+use raylib::ffi::GetCurrentMonitor;
 use raylib::{RaylibHandle, ffi::KeyboardKey};
 
 // Display Constants
@@ -165,6 +167,8 @@ pub(crate) struct Emulator {
     ticker_channel: Option<mpsc::Sender<()>>,
     /// Handle for performing Raylib operations
     raylib: RaylibHandle,
+    /// Random number generator
+    rng: rand::prelude::ThreadRng,
 }
 
 impl Drop for Emulator {
@@ -238,6 +242,9 @@ impl Emulator {
         // Create the empty display
         let display = Display::new();
 
+        // Create the RNG to use for randomness
+        let rng = rand::rng();
+
         let mut emulator = Self {
             memory,
             display,
@@ -251,6 +258,7 @@ impl Emulator {
             ticker_handle: Some(ticker_handle),
             ticker_channel: Some(sender),
             raylib,
+            rng,
         };
         emulator.load_font().context("Trying to create emulator")?;
         Ok(emulator)
@@ -408,6 +416,17 @@ impl Emulator {
         Ok(())
     }
 
+    /// Set the value of the index register
+    fn set_index(&mut self, value: u16) -> Result<()> {
+        self.index_register = value;
+        Ok(())
+    }
+
+    /// Get the value of the index register
+    fn get_index(&self) -> Result<u16> {
+        Ok(self.index_register)
+    }
+
     /// Fetch the current instruction (incrementing the program counter appropriately)
     fn fetch(&mut self) -> Result<(u8, u8)> {
         let b1 = self
@@ -461,7 +480,7 @@ impl Emulator {
                 let dest = self.stack_pop()? as usize;
                 self.jump(dest)?;
             }
-            // Conditional jumps
+            // CONDITIONAL JUMPS
             (0x3, x, ..) => {
                 // If value of register VX is equal to NN, skip next instruction
                 if self.get_reg(x as usize)? == nib_nn {
@@ -486,13 +505,158 @@ impl Emulator {
                     self.program_counter += INSTRUCTION_LENGTH;
                 }
             }
-            // Set Register
+            // SET REGISTER
             (0x6, x, ..) => {
                 self.set_reg(x as usize, nib_nn)?;
             }
-            // Add to register
+            // ADD TO REGISTER
             (0x7, x, ..) => {
                 self.add_reg(x as usize, nib_nn)?;
+            }
+            // ARITHMETIC/LOGICAL OPERATIONS
+            // SET
+            (0x8, x, y, 0x0) => {
+                let vy_val = self.get_reg(y as usize)?;
+                self.set_reg(x as usize, vy_val)?;
+            }
+            // BINARY REGISTER OPS
+            (0x8, x, y, n) => {
+                let vx = self.get_reg(x as usize)?;
+                let vy = self.get_reg(y as usize)?;
+                match n {
+                    0x1 => self.set_reg(x as usize, vx | vy)?,
+                    0x2 => self.set_reg(x as usize, vx & vy)?,
+                    0x3 => self.set_reg(x as usize, vx ^ vy)?,
+                    0x4 => {
+                        let (res, carry) = vx.overflowing_add(vy);
+                        self.set_reg(0xF, carry.into())?;
+                        self.set_reg(x as usize, res)?
+                    }
+                    0x5 => {
+                        let (res, carry) = vx.overflowing_sub(vy);
+                        self.set_reg(0xF, (!carry).into())?;
+                        self.set_reg(x as usize, res)?
+                    }
+                    0x7 => {
+                        let (res, carry) = vy.overflowing_sub(vx);
+                        self.set_reg(0xF, (!carry).into())?;
+                        self.set_reg(x as usize, res)?
+                    }
+                    0x6 | 0xE => {
+                        let shift_right = n == 0x6;
+                        // TODO: Add config for this step as it is ambigous
+                        // NOTE: Setting VX to VY is different between COSMAC and CHIP-48
+                        let shift_target = vy;
+                        // Shift register to the right
+                        let dropped_bit =
+                            shift_target & if shift_right { 0b00000001 } else { 0b10000000 };
+                        // Set VX to shifted value
+                        self.set_reg(
+                            x as usize,
+                            if shift_right {
+                                shift_target >> 1
+                            } else {
+                                shift_target << 1
+                            },
+                        )?;
+                        // Set flag register to dropped bit
+                        self.set_reg(0xFusize, dropped_bit)?;
+                    }
+                    _ => bail!("Unimplemented binary register operation {:#x}", n),
+                }
+            }
+            // SET INDEX REGISTER
+            (0xA, ..) => self.set_index(nib_nnn)?,
+            // JUMP OFFSET
+            (0xB, ..) => {
+                // TODO: Allow configuration of behavior,
+                // COSMAC jumped to NNN+V0, later jumped to NN+VX
+                let dest = nib_nnn + self.get_reg(0x0)? as u16;
+                self.program_counter = dest as usize;
+            }
+            // RAND
+            (0xC, x, ..) => {
+                // Get a random u8
+                let rand: u8 = (self.rng.next_u32() >> (32 - 8)).try_into()?;
+                // AND with the value NN
+                self.set_reg(x as usize, rand & nib_nn)?;
+            }
+            // DISPLAY
+            (0xD, x, y, n) => self.draw_sprite(
+                self.get_index()?.into(),
+                n as usize,
+                self.get_reg(x as usize)?.into(),
+                self.get_reg(y as usize)?.into(),
+            )?,
+            // SKIP IF KEY
+            (0xE, x, 0x9, 0xE) => {
+                if self.check_key(self.get_reg(x.into())?)? {
+                    self.program_counter += INSTRUCTION_LENGTH
+                };
+            }
+            // SKIP IF NOT KEY
+            (0xE, x, 0xA, 0x1) => {
+                if !self.check_key(self.get_reg(x.into())?)? {
+                    self.program_counter += INSTRUCTION_LENGTH
+                };
+            }
+            // TIMERS
+            // GET DELAY TIMER
+            (0xF, x, 0x0, 0x7) => {
+                let current_timer: u8;
+                // Lock and release as fast as possible, just grab the value
+                {
+                    current_timer = self.delay_timer.lock().unwrap().to_owned();
+                }
+                self.set_reg(x.into(), current_timer)?;
+            }
+            // SET DELAY TIMER
+            (0xF, x, 0x1, 0x5) => {
+                let new_delay = self.get_reg(x.into())?;
+                {
+                    *self.delay_timer.lock().unwrap() = new_delay;
+                }
+            }
+            // SET SOUND TIMER
+            (0xF, x, 0x1, 0x8) => {
+                let new_delay = self.get_reg(x.into())?;
+                {
+                    *self.sound_timer.lock().unwrap() = new_delay;
+                }
+            }
+            // ADD TO INDEX
+            (0xF, x, 0x1, 0xE) => {
+                let index = self.get_index()?;
+                let (res, carry) = index.overflowing_add(self.get_reg(x.into())?.into());
+                self.set_index(res)?;
+                self.set_reg(0xF, (carry || res > 0x0FFF).into())?;
+            }
+            // BLOCKING GET KEY
+            (0xF, x, 0x0, 0xA) => {
+                let mut key_pressed = None;
+                // Check if any of the keys are pressed
+                for (key_val, keyboardkey) in KEYMAP.iter().enumerate() {
+                    if self.raylib.is_key_down(*keyboardkey) {
+                        key_pressed = Some(key_val);
+                        break;
+                    }
+                }
+                match key_pressed {
+                    Some(key) => {
+                        // NOTE: Key is garunteed to fit into u8 since the length of the
+                        // array is only 16
+                        self.set_reg(x.into(), key.try_into()?)?;
+                    }
+                    None => {
+                        // Set the program counter back to the start of this instruction
+                        // to 'block' the program and wait for a key
+                        self.program_counter -= INSTRUCTION_LENGTH;
+                    }
+                }
+            }
+            // SET INDEX TO FONT CHAR
+            (0xF, x, 0x3, 0x3) => {
+                self.set_index((FONT_START_POSITION + (x as usize * FONT_HEIGHT)).try_into()?)?;
             }
             (other, ..) => {
                 bail!("Instruction {other:#x} not implemented")
