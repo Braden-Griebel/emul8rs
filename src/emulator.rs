@@ -655,8 +655,59 @@ impl Emulator {
                 }
             }
             // SET INDEX TO FONT CHAR
-            (0xF, x, 0x3, 0x3) => {
+            (0xF, x, 0x2, 0x9) => {
                 self.set_index((FONT_START_POSITION + (x as usize * FONT_HEIGHT)).try_into()?)?;
+            }
+            // BINARY DECIMAL CONVERSION
+            (0xF, x, 0x3, 0x3) => {
+                // Get reg value
+                let vx = self.get_reg(x.into())?;
+                let idx = self.get_index()?;
+                // Extract decimal
+                let ones = vx % 10;
+                let tens = (vx % 100) / 10;
+                let hundreds = vx / 100;
+                // Set the values in memory
+                *(self
+                    .memory
+                    .get_mut(idx as usize)
+                    .context("Memory index error during decimal conversion instruction")?) = ones;
+                *(self
+                    .memory
+                    .get_mut((idx + 1) as usize)
+                    .context("Memory index error during decimal conversion instruction")?) = tens;
+                *(self
+                    .memory
+                    .get_mut((idx + 2) as usize)
+                    .context("Memory index error during decimal conversion instruction")?) =
+                    hundreds;
+            }
+            // STORE REGISTERS
+            (0xF, x, 0x5, 0x5) => {
+                let idx = self.get_index()? as usize;
+                let vx = self.get_reg(x.into())? as usize;
+                for reg in 0..=vx {
+                    let dest = idx + reg;
+                    *(self.memory.get_mut(dest).context(format!(
+                        "Trying to store register {:#x} into memory at invalid address {:#x}",
+                        x, dest,
+                    ))?) = self.get_reg(reg)?;
+                }
+            }
+            // LOAD REGISTERS
+            (0xF, x, 0x6, 0x5) => {
+                let idx = self.get_index()? as usize;
+                let vx = self.get_reg(x.into())? as usize;
+                for reg in 0..=vx {
+                    let source = idx + reg;
+                    self.set_reg(
+                        reg,
+                        *(self.memory.get(source).context(format!(
+                            "Trying to load memory at invalid address {:#x} into register {:#x}",
+                            source, x,
+                        ))?),
+                    )?;
+                }
             }
             (other, ..) => {
                 bail!("Instruction {other:#x} not implemented")
