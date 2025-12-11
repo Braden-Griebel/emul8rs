@@ -6,8 +6,7 @@ use std::time::{Duration, Instant};
 
 // External uses
 use anyhow::{Context, Result, bail};
-use rand::{self, Rng, RngCore};
-use raylib::ffi::GetCurrentMonitor;
+use rand::{self, RngCore};
 use raylib::{RaylibHandle, ffi::KeyboardKey};
 
 // Display Constants
