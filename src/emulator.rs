@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 // External uses
 use anyhow::{Context, Result, bail};
+use raylib::{RaylibHandle, ffi::KeyboardKey};
 
 // Display Constants
 const DISPLAY_ROWS: usize = 32;
@@ -45,6 +46,35 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
     0xE0, 0x90, 0x90, 0x90, 0xE0, // D
     0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+];
+
+// mapped from
+// 1  2  3  4
+// Q  W  E  R
+// A  S  D  F
+// Z  X  C  V
+// to
+// 1  2  3  C
+// 4  5  6  D
+// 7  8  9  E
+// A  0  B  F
+const KEYMAP: [KeyboardKey; 16] = [
+    KeyboardKey::KEY_X,
+    KeyboardKey::KEY_ONE,
+    KeyboardKey::KEY_TWO,
+    KeyboardKey::KEY_THREE,
+    KeyboardKey::KEY_Q,
+    KeyboardKey::KEY_W,
+    KeyboardKey::KEY_E,
+    KeyboardKey::KEY_A,
+    KeyboardKey::KEY_S,
+    KeyboardKey::KEY_D,
+    KeyboardKey::KEY_Z,
+    KeyboardKey::KEY_C,
+    KeyboardKey::KEY_FOUR,
+    KeyboardKey::KEY_R,
+    KeyboardKey::KEY_F,
+    KeyboardKey::KEY_V,
 ];
 
 // NOTE: This may be replaces with underlying bitvec to save space eventually
@@ -132,12 +162,28 @@ pub(crate) struct Emulator {
     /// Handle of thread used for ticking the delay timers
     ticker_handle: Option<thread::JoinHandle<()>>,
     /// Channel to the ticker thread
-    ticker_channel: mpsc::Sender<()>,
+    ticker_channel: Option<mpsc::Sender<()>>,
+    /// Handle for performing Raylib operations
+    raylib: RaylibHandle,
+}
+
+impl Drop for Emulator {
+    /// Drop the emulator (just stops the counter thread)
+    fn drop(&mut self) {
+        // Send the stop to the ticker
+        if let Some(channel) = &self.ticker_channel {
+            channel.send(()).expect("Failed to stop ticker thread");
+        }
+        // Join the ticker back to this thread
+        if let Some(handle) = self.ticker_handle.take() {
+            handle.join().expect("Failed to join with ticker thread");
+        }
+    }
 }
 
 impl Emulator {
     /// Create a new Emulator with zeroed fields
-    fn new() -> Result<Self> {
+    fn new(raylib: RaylibHandle) -> Result<Self> {
         // Create the sound and delay timers
         let delay_timer = Arc::new(Mutex::new(0u8));
         let sound_timer = Arc::new(Mutex::new(0u8));
@@ -203,7 +249,8 @@ impl Emulator {
             delay_timer,
             sound_timer,
             ticker_handle: Some(ticker_handle),
-            ticker_channel: sender,
+            ticker_channel: Some(sender),
+            raylib,
         };
         emulator.load_font().context("Trying to create emulator")?;
         Ok(emulator)
@@ -308,6 +355,24 @@ impl Emulator {
         Ok(())
     }
 
+    /// Check if the `key` is currently pressed
+    ///
+    /// Key is a u8, representing one of the 0-F keys
+    /// mapped from
+    /// 1  2  3  4
+    /// Q  W  E  R
+    /// A  S  D  F
+    /// Z  X  C  V
+    /// to
+    /// 1  2  3  C
+    /// 4  5  6  D
+    /// 7  8  9  E
+    /// A  0  B  F
+    fn check_key(&self, key: u8) -> Result<bool> {
+        // If bounds check gaurunteed by the u8 passed in
+        Ok(self.raylib.is_key_down(KEYMAP[key as usize]))
+    }
+
     /// Fetch the current instruction (incrementing the program counter appropriately)
     fn fetch(&mut self) -> Result<(u8, u8)> {
         let b1 = self
@@ -322,5 +387,9 @@ impl Emulator {
             .to_owned();
         self.program_counter += INSTRUCTION_LENGTH;
         Ok((b1, b2))
+    }
+
+    fn execute(&mut self) -> Result<()> {
+        Ok(())
     }
 }
