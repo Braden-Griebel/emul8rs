@@ -1,8 +1,7 @@
 use raylib::{
-    RaylibHandle,
-    audio::{RaylibAudio, Sound},
+    RaylibHandle, RaylibThread,
+    audio::{RaylibAudio, Sound, Wave},
     color::Color,
-    drawing::RaylibDrawHandle,
     ffi::KeyboardKey,
     prelude::RaylibDraw,
 };
@@ -49,9 +48,10 @@ const WINDOW_WIDTH: i32 = 640;
 const WINDOW_HEIGHT: i32 = 480;
 
 /// Fontend using the Raylib library
-struct RaylibFrontend<'a, 'b> {
+struct RaylibFrontend<'a> {
     handle: RaylibHandle,
-    drawhandle: RaylibDrawHandle<'b>,
+    thread: RaylibThread,
+    wave: Wave<'a>,
     sound: Sound<'a>,
     playing_sound: bool,
     window_width: i32,
@@ -60,20 +60,19 @@ struct RaylibFrontend<'a, 'b> {
     background: Color,
 }
 
-impl<'a, 'b> RaylibFrontend<'a, 'b> {
+impl<'a> RaylibFrontend<'a> {
     /// Create a new raylib frontend struct from a raylib handle
-    fn new(
-        handle: RaylibHandle,
-        drawhandle: RaylibDrawHandle<'b>,
-        audio: &'a RaylibAudio,
-        foreground: Color,
-        background: Color,
-    ) -> Result<Self> {
-        let wave = audio.new_wave_from_memory(".wav", BEEP_SOUND)?;
-        let sound = audio.new_sound_from_wave(&wave)?;
+    fn new(foreground: Color, background: Color, audio: &'a RaylibAudio) -> Result<Self> {
+        let (handle, thread) = raylib::init()
+            .size(WINDOW_WIDTH, WINDOW_HEIGHT)
+            .title("Emul8rs")
+            .build();
+        let wave: Wave<'a> = audio.new_wave_from_memory(".wav", BEEP_SOUND)?;
+        let sound: Sound<'a> = audio.new_sound_from_wave(&wave)?;
         Ok(Self {
             handle,
-            drawhandle,
+            thread,
+            wave,
             sound,
             playing_sound: true,
             window_width: WINDOW_WIDTH,
@@ -84,7 +83,7 @@ impl<'a, 'b> RaylibFrontend<'a, 'b> {
     }
 }
 
-impl Frontend for RaylibFrontend<'_, '_> {
+impl Frontend for RaylibFrontend<'_> {
     fn draw(&mut self, display: &Display) -> anyhow::Result<()> {
         // Check window sizing
         if self.handle.is_window_resized() {
@@ -94,8 +93,10 @@ impl Frontend for RaylibFrontend<'_, '_> {
         // Get the sizes of the individual cells
         let cell_width = self.window_width / (DISPLAY_COLS as i32);
         let cell_height = self.window_height / (DISPLAY_ROWS as i32);
+        // Start the drawing
+        let mut drawhandle = self.handle.begin_drawing(&self.thread);
         // Clear to screen and start adding the filled cells
-        self.drawhandle.clear_background(self.background);
+        drawhandle.clear_background(self.background);
         // Iterate through each cell, and draw it to the screen
         // NOTE: The display is in row major order
         let mut row: usize;
@@ -112,7 +113,7 @@ impl Frontend for RaylibFrontend<'_, '_> {
                 let y_coord = row as i32 * cell_height;
 
                 // Find the
-                self.drawhandle.draw_rectangle(
+                drawhandle.draw_rectangle(
                     x_coord,
                     y_coord,
                     cell_width,
@@ -121,7 +122,6 @@ impl Frontend for RaylibFrontend<'_, '_> {
                 );
             }
         }
-
         Ok(())
     }
 
