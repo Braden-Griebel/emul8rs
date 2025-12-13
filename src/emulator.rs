@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use rand::{self, RngCore};
 
 // Crate uses
+use crate::config;
 use crate::display::{DISPLAY_COLS, DISPLAY_ROWS, Display};
 use crate::frontend::Frontend;
 
@@ -47,27 +48,6 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-/// Configuration of the emulator
-///
-/// Includes settings for dealing with some ambigous instructions.
-struct EmulatorConfig {
-    instructions_per_second: u64,
-    shift_use_vy: bool,
-    jump_offset_use_v0: bool,
-    store_memory_update_i: bool,
-}
-
-impl Default for EmulatorConfig {
-    fn default() -> Self {
-        Self {
-            instructions_per_second: 700,
-            shift_use_vy: true,
-            jump_offset_use_v0: true,
-            store_memory_update_i: false,
-        }
-    }
-}
-
 //NOTE: For the memory, the programs will be loaded starting at adress 512
 
 /// Chip8 Emulator
@@ -98,7 +78,7 @@ pub(crate) struct Emulator {
     /// Handle for performing Raylib operations
     frontend: Box<dyn Frontend>,
     /// Configuration object
-    config: EmulatorConfig,
+    config: config::EmulatorConfig,
     /// Random number generator
     rng: rand::prelude::ThreadRng,
     /// Whether the emulator is currently playing sound
@@ -123,7 +103,7 @@ impl Drop for Emulator {
 
 impl Emulator {
     /// Create a new Emulator with zeroed fields
-    fn new(frontend: Box<dyn Frontend>, config: EmulatorConfig) -> Result<Self> {
+    fn new(frontend: Box<dyn Frontend>, config: config::EmulatorConfig) -> Result<Self> {
         // Create the sound and delay timers
         let delay_timer = Arc::new(Mutex::new(0u8));
         let sound_timer = Arc::new(Mutex::new(0u8));

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+pub mod config;
 pub mod display;
 pub mod emulator;
 pub mod frontend;

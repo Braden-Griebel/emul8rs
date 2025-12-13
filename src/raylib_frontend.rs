@@ -6,8 +6,9 @@ use raylib::{
     prelude::RaylibDraw,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
+use crate::config;
 use crate::display::{DISPLAY_COLS, DISPLAY_ROWS, Display};
 use crate::frontend::Frontend;
 // Keymap
@@ -62,13 +63,18 @@ struct RaylibFrontend<'a> {
 
 impl<'a> RaylibFrontend<'a> {
     /// Create a new raylib frontend struct from a raylib handle
-    fn new(foreground: Color, background: Color, audio: &'a RaylibAudio) -> Result<Self> {
+    fn new(config: &config::EmulatorConfig, audio: &'a RaylibAudio) -> Result<Self> {
         let (handle, thread) = raylib::init()
             .size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .title("Emul8rs")
             .build();
         let wave: Wave<'a> = audio.new_wave_from_memory(".wav", BEEP_SOUND)?;
         let sound: Sound<'a> = audio.new_sound_from_wave(&wave)?;
+        // Create the colors form the config hex strings
+        let foreground = Color::from_hex(&config.foreground)
+            .context("Parsing foreground color from hex string")?;
+        let background = Color::from_hex(&config.background)
+            .context("Parsing backgorund color from hex string")?;
         Ok(Self {
             handle,
             thread,
