@@ -54,7 +54,7 @@ impl Display {
     }
 
     /// Return an iterator over the elements of the display
-    pub fn iter(&self) -> std::slice::Iter<'_, bool> {
+    pub fn iter_cells(&self) -> std::slice::Iter<'_, bool> {
         self.data.iter()
     }
 
