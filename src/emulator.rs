@@ -51,7 +51,7 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
 //NOTE: For the memory, the programs will be loaded starting at adress 512
 
 /// Chip8 Emulator
-pub(crate) struct Emulator {
+pub(crate) struct Emulator<'a> {
     /// Memory including program memory and ram
     memory: Vec<u8>,
     /// Representation of the display (actual drawing handled in [crate::artist])
@@ -76,7 +76,7 @@ pub(crate) struct Emulator {
     /// Channel to the ticker thread
     ticker_channel: Option<mpsc::Sender<()>>,
     /// Handle for performing Raylib operations
-    frontend: Box<dyn Frontend>,
+    frontend: Box<dyn Frontend + 'a>,
     /// Configuration object
     config: config::EmulatorConfig,
     /// Random number generator
@@ -87,7 +87,7 @@ pub(crate) struct Emulator {
     step_duration: Duration,
 }
 
-impl Drop for Emulator {
+impl<'a> Drop for Emulator<'a> {
     /// Drop the emulator (just stops the counter thread)
     fn drop(&mut self) {
         // Send the stop to the ticker
@@ -101,9 +101,9 @@ impl Drop for Emulator {
     }
 }
 
-impl Emulator {
+impl<'a> Emulator<'a> {
     /// Create a new Emulator with zeroed fields
-    fn new(frontend: Box<dyn Frontend>, config: config::EmulatorConfig) -> Result<Self> {
+    pub fn new(frontend: Box<dyn Frontend + 'a>, config: config::EmulatorConfig) -> Result<Self> {
         // Create the sound and delay timers
         let delay_timer = Arc::new(Mutex::new(0u8));
         let sound_timer = Arc::new(Mutex::new(0u8));
@@ -187,7 +187,7 @@ impl Emulator {
     }
 
     /// Run the emulator
-    fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> Result<()> {
         while !self.frontend.should_stop() {
             // get the time at the start of the loop
             let start_time = Instant::now();
@@ -464,6 +464,9 @@ impl Emulator {
                         x, dest,
                     ))?) = self.get_reg(reg)?;
                 }
+                if self.config.store_memory_update_index {
+                    self.set_index(idx as u16 + x as u16 + 1)?;
+                }
             }
             // LOAD REGISTERS
             (0xF, x, 0x6, 0x5) => {
@@ -478,6 +481,9 @@ impl Emulator {
                             source, x,
                         ))?),
                     )?;
+                }
+                if self.config.store_memory_update_index {
+                    self.set_index(idx as u16 + x as u16 + 1)?;
                 }
             }
             (other, ..) => {
