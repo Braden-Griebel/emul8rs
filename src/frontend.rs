@@ -31,4 +31,8 @@ pub trait Frontend {
     fn stop_sound(&mut self) -> Result<()>;
     /// Check if the emulator should exit
     fn should_stop(&mut self) -> bool;
+    /// Function called during every instruction loop
+    ///
+    /// Mainly a workaround to allow raylib front end to keep the audio playing
+    fn step(&mut self) -> Result<()>;
 }
