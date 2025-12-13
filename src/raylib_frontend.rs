@@ -49,7 +49,7 @@ const WINDOW_WIDTH: i32 = 640;
 const WINDOW_HEIGHT: i32 = 480;
 
 /// Fontend using the Raylib library
-struct RaylibFrontend<'a> {
+pub struct RaylibFrontend<'a> {
     handle: RaylibHandle,
     thread: RaylibThread,
     wave: Wave<'a>,
@@ -63,7 +63,7 @@ struct RaylibFrontend<'a> {
 
 impl<'a> RaylibFrontend<'a> {
     /// Create a new raylib frontend struct from a raylib handle
-    fn new(config: &config::EmulatorConfig, audio: &'a RaylibAudio) -> Result<Self> {
+    pub fn new(config: &config::EmulatorConfig, audio: &'a RaylibAudio) -> Result<Self> {
         let (handle, thread) = raylib::init()
             .size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .title("Emul8rs")
