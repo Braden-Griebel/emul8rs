@@ -16,6 +16,7 @@ use crate::frontend::Frontend;
 const MAX_STACK_SIZE: usize = 128;
 const NUM_REGISTERS: usize = 16;
 const MILLIS_PER_SECOND: u64 = 1_000;
+const MICROS_PER_SECOND: u64 = 1_000_000;
 const TIMER_HZ: u64 = 60;
 const GAME_MEMORY_START: usize = 0x200;
 const INSTRUCTION_LENGTH: usize = 2;
@@ -46,14 +47,23 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
+/// Configuration of the emulator
+///
+/// Includes settings for dealing with some ambigous instructions.
 struct EmulatorConfig {
     instructions_per_second: u64,
+    shift_use_vy: bool,
+    jump_offset_use_v0: bool,
+    store_memory_update_i: bool,
 }
 
 impl Default for EmulatorConfig {
     fn default() -> Self {
         Self {
             instructions_per_second: 700,
+            shift_use_vy: true,
+            jump_offset_use_v0: true,
+            store_memory_update_i: false,
         }
     }
 }
@@ -93,6 +103,8 @@ pub(crate) struct Emulator {
     rng: rand::prelude::ThreadRng,
     /// Whether the emulator is currently playing sound
     playing_sound: bool,
+    /// The length of time each instruction loop should take
+    step_duration: Duration,
 }
 
 impl Drop for Emulator {
@@ -169,6 +181,9 @@ impl Emulator {
         // Create the RNG to use for randomness
         let rng = rand::rng();
 
+        // Determine how long the execution steps should take
+        let step_duration = Duration::from_micros(MICROS_PER_SECOND / 700);
+
         let mut emulator = Self {
             memory,
             display,
@@ -185,14 +200,17 @@ impl Emulator {
             config,
             playing_sound: false,
             rng,
+            step_duration,
         };
-        emulator.load_font().context("Trying to create emulator")?;
+        emulator.load_font().context("Trying to load font")?;
         Ok(emulator)
     }
 
     /// Run the emulator
     fn run(&mut self) -> Result<()> {
         while !self.frontend.should_stop() {
+            // get the time at the start of the loop
+            let start_time = Instant::now();
             self.frontend.draw(&self.display)?;
             self.execute()?;
             let sound_timer: u8;
@@ -206,6 +224,9 @@ impl Emulator {
                 self.frontend.play_sound()?;
                 self.playing_sound = false;
             }
+            let stop_time = Instant::now();
+            // Sleep long enough to match the instructions per second
+            thread::sleep(self.step_duration.saturating_sub(stop_time - start_time));
         }
         Ok(())
     }
@@ -250,25 +271,25 @@ impl Emulator {
             // CONDITIONAL JUMPS
             (0x3, x, ..) => {
                 // If value of register VX is equal to NN, skip next instruction
-                if self.get_reg(x as usize)? == nib_nn {
+                if self.get_reg(x)? == nib_nn {
                     self.program_counter += INSTRUCTION_LENGTH;
                 }
             }
             (0x4, x, ..) => {
                 // If value of register VX is NOT equal to NN, skip next instruction
-                if self.get_reg(x as usize)? != nib_nn {
+                if self.get_reg(x)? != nib_nn {
                     self.program_counter += INSTRUCTION_LENGTH;
                 }
             }
             (0x5, x, y, ..) => {
                 // If value at VX == value at VY, skip next instruction
-                if self.get_reg(x as usize)? == self.get_reg(y as usize)? {
+                if self.get_reg(x)? == self.get_reg(y)? {
                     self.program_counter += INSTRUCTION_LENGTH;
                 }
             }
             (0x9, x, y, ..) => {
                 // If value at VX != value at VY, skip next instruction
-                if self.get_reg(x as usize)? != self.get_reg(y as usize)? {
+                if self.get_reg(x)? != self.get_reg(y)? {
                     self.program_counter += INSTRUCTION_LENGTH;
                 }
             }
@@ -283,13 +304,13 @@ impl Emulator {
             // ARITHMETIC/LOGICAL OPERATIONS
             // SET
             (0x8, x, y, 0x0) => {
-                let vy_val = self.get_reg(y as usize)?;
+                let vy_val = self.get_reg(y)?;
                 self.set_reg(x as usize, vy_val)?;
             }
             // BINARY REGISTER OPS
             (0x8, x, y, n) => {
-                let vx = self.get_reg(x as usize)?;
-                let vy = self.get_reg(y as usize)?;
+                let vx = self.get_reg(x)?;
+                let vy = self.get_reg(y)?;
                 match n {
                     0x1 => self.set_reg(x as usize, vx | vy)?,
                     0x2 => self.set_reg(x as usize, vx & vy)?,
@@ -311,9 +332,8 @@ impl Emulator {
                     }
                     0x6 | 0xE => {
                         let shift_right = n == 0x6;
-                        // TODO: Add config for this step as it is ambigous
                         // NOTE: Setting VX to VY is different between COSMAC and CHIP-48
-                        let shift_target = vy;
+                        let shift_target = if self.config.shift_use_vy { vy } else { vx };
                         // Shift register to the right
                         let dropped_bit =
                             shift_target & if shift_right { 0b00000001 } else { 0b10000000 };
@@ -335,10 +355,14 @@ impl Emulator {
             // SET INDEX REGISTER
             (0xA, ..) => self.set_index(nib_nnn)?,
             // JUMP OFFSET
-            (0xB, ..) => {
+            (0xB, x, ..) => {
                 // TODO: Allow configuration of behavior,
                 // COSMAC jumped to NNN+V0, later jumped to NN+VX
-                let dest = nib_nnn + self.get_reg(0x0)? as u16;
+                let dest = if self.config.jump_offset_use_v0 {
+                    nib_nnn + self.get_reg(0x0)? as u16
+                } else {
+                    nib_nnn + self.get_reg(x)? as u16
+                };
                 self.program_counter = dest as usize;
             }
             // RAND
@@ -352,18 +376,18 @@ impl Emulator {
             (0xD, x, y, n) => self.draw_sprite(
                 self.get_index()?.into(),
                 n as usize,
-                self.get_reg(x as usize)?.into(),
-                self.get_reg(y as usize)?.into(),
+                self.get_reg(x)?.into(),
+                self.get_reg(y)?.into(),
             )?,
             // SKIP IF KEY
             (0xE, x, 0x9, 0xE) => {
-                if self.check_key(self.get_reg(x.into())?)? {
+                if self.check_key(self.get_reg(x)?)? {
                     self.program_counter += INSTRUCTION_LENGTH
                 };
             }
             // SKIP IF NOT KEY
             (0xE, x, 0xA, 0x1) => {
-                if !self.check_key(self.get_reg(x.into())?)? {
+                if !self.check_key(self.get_reg(x)?)? {
                     self.program_counter += INSTRUCTION_LENGTH
                 };
             }
@@ -379,14 +403,14 @@ impl Emulator {
             }
             // SET DELAY TIMER
             (0xF, x, 0x1, 0x5) => {
-                let new_delay = self.get_reg(x.into())?;
+                let new_delay = self.get_reg(x)?;
                 {
                     *self.delay_timer.lock().unwrap() = new_delay;
                 }
             }
             // SET SOUND TIMER
             (0xF, x, 0x1, 0x8) => {
-                let new_delay = self.get_reg(x.into())?;
+                let new_delay = self.get_reg(x)?;
                 {
                     *self.sound_timer.lock().unwrap() = new_delay;
                 }
@@ -394,7 +418,7 @@ impl Emulator {
             // ADD TO INDEX
             (0xF, x, 0x1, 0xE) => {
                 let index = self.get_index()?;
-                let (res, carry) = index.overflowing_add(self.get_reg(x.into())?.into());
+                let (res, carry) = index.overflowing_add(self.get_reg(x)?.into());
                 self.set_index(res)?;
                 self.set_reg(0xF, (carry || res > 0x0FFF).into())?;
             }
@@ -428,7 +452,7 @@ impl Emulator {
             // BINARY DECIMAL CONVERSION
             (0xF, x, 0x3, 0x3) => {
                 // Get reg value
-                let vx = self.get_reg(x.into())?;
+                let vx = self.get_reg(x)?;
                 let idx = self.get_index()?;
                 // Extract decimal
                 let ones = vx % 10;
@@ -452,9 +476,9 @@ impl Emulator {
             // STORE REGISTERS
             (0xF, x, 0x5, 0x5) => {
                 let idx = self.get_index()? as usize;
-                let vx = self.get_reg(x.into())? as usize;
+                let vx = self.get_reg(x)?;
                 for reg in 0..=vx {
-                    let dest = idx + reg;
+                    let dest = idx + reg as usize;
                     *(self.memory.get_mut(dest).context(format!(
                         "Trying to store register {:#x} into memory at invalid address {:#x}",
                         x, dest,
@@ -464,7 +488,7 @@ impl Emulator {
             // LOAD REGISTERS
             (0xF, x, 0x6, 0x5) => {
                 let idx = self.get_index()? as usize;
-                let vx = self.get_reg(x.into())? as usize;
+                let vx = self.get_reg(x)? as usize;
                 for reg in 0..=vx {
                     let source = idx + reg;
                     self.set_reg(
@@ -594,10 +618,10 @@ impl Emulator {
     }
 
     /// Get the value in register `register`
-    fn get_reg(&self, register: usize) -> Result<u8> {
+    fn get_reg(&self, register: u8) -> Result<u8> {
         Ok(self
             .registers
-            .get(register)
+            .get(register as usize)
             .context(format!("Trying to get value at register {register:#x}"))?
             .to_owned())
     }
