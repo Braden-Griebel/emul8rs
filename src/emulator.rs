@@ -46,11 +46,15 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-struct EmulatorConfig {}
+struct EmulatorConfig {
+    instructions_per_second: u64,
+}
 
 impl Default for EmulatorConfig {
     fn default() -> Self {
-        Self {}
+        Self {
+            instructions_per_second: 700,
+        }
     }
 }
 
@@ -179,6 +183,7 @@ impl Emulator {
             ticker_channel: Some(sender),
             frontend,
             config,
+            playing_sound: false,
             rng,
         };
         emulator.load_font().context("Trying to create emulator")?;
