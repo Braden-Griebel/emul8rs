@@ -4,9 +4,10 @@ use crate::display::Display;
 
 /// Trait for implementing a front-end to the compiler,
 /// will essentially need a way to draw the display,
-/// read keyboard input, and play a sound
-/// (any of these can technically be noops so
-/// the emulator can be run in a headless mode)
+/// read keyboard input, play a sound, and check if
+/// the emulator should stop (any of these except the
+/// should quit can technically be noops so the
+/// emulator can be run in a headless mode)
 pub trait Frontend {
     /// Take in a display object, and draw it
     ///
@@ -14,7 +15,7 @@ pub trait Frontend {
     /// so the screen will likely need to be cleared,
     /// or some internal state can be used to check
     /// only update needed cells.
-    fn draw(&mut self, display: Display) -> Result<()>;
+    fn draw(&mut self, display: &Display) -> Result<()>;
     /// Check if a key is down, returing Ok(true) if
     /// if is down, and Ok(false) if it isn't.
     ///
@@ -28,4 +29,6 @@ pub trait Frontend {
     fn play_sound(&mut self) -> Result<()>;
     /// Stop playing the sound started by [start_sound]
     fn stop_sound(&mut self) -> Result<()>;
+    /// Check if the emulator should exit
+    fn should_stop(&mut self) -> bool;
 }

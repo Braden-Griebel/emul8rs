@@ -87,6 +87,8 @@ pub(crate) struct Emulator {
     config: EmulatorConfig,
     /// Random number generator
     rng: rand::prelude::ThreadRng,
+    /// Whether the emulator is currently playing sound
+    playing_sound: bool,
 }
 
 impl Drop for Emulator {
@@ -183,183 +185,24 @@ impl Emulator {
         Ok(emulator)
     }
 
-    /// Add a value to the stack
-    fn stack_push(&mut self, value: u16) -> Result<()> {
-        *(self
-            .stack
-            .get_mut(self.stack_top)
-            .context("Stack overflow!")?) = value;
-        Ok(())
-    }
-
-    /// Pop the value off the top of the stack
-    fn stack_pop(&mut self) -> Result<u16> {
-        if self.stack_top == 0 {
-            bail!("Trying to pop from empty stack");
-        }
-        self.stack_top -= 1;
-        Ok(*(self
-            .stack
-            .get(self.stack_top)
-            .context("Invalid stack pointer")?))
-    }
-
-    /// Load the font into memory starting at FONT_START_POSITION
-    fn load_font(&mut self) -> Result<()> {
-        for (idx, byte) in (FONT_START_POSITION..(FONT_START_POSITION + FONT.len())).zip(FONT) {
-            *(self
-                .memory
-                .get_mut(idx)
-                .context("Trying to load font into emulator memory")?) = byte
-        }
-        Ok(())
-    }
-
-    /// Read a file, loads into memory starting at position 0x200 (512)
-    fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let contents = std::fs::read(path).context("Failed to read input file")?;
-        let mut memory_index: usize = 0x200;
-
-        // Iterate through the file, moving each byte into memory
-        for byte in contents {
-            *(self
-                .memory
-                .get_mut(memory_index)
-                .context("Insufficient memory to hold game file")?) = byte;
-            memory_index += 1;
-        }
-
-        Ok(())
-    }
-
-    /// Draw a sprite to the screen
-    ///
-    /// Starting from the byte in memory at sprite_index, with length/height sprite_length,
-    /// draw the sprite at the row given by y_pos, and the columns given by x_pos.
-    fn draw_sprite(
-        &mut self,
-        sprite_index: usize,
-        sprite_length: usize,
-        x_pos: usize,
-        y_pos: usize,
-    ) -> Result<()> {
-        let mut cur_index = sprite_index;
-        // The x and y coordinates are allowed to wrap
-        let x_pos = x_pos % DISPLAY_COLS;
-        let y_pos = y_pos % DISPLAY_ROWS;
-
-        // Loop through the sprite, xoring with the display bits
-        for row_offset in 0..sprite_length {
-            // If off bottom of screen, stop trying to draw
-            if y_pos + row_offset >= DISPLAY_ROWS {
-                break;
-            };
-            // Get the byte for the current row of the sprite
-            let mut sprite_byte = self
-                .memory
-                .get(cur_index)
-                .context("Trying to get byte in sprite")?
-                .to_owned();
-            for col_offset in 0..SPRITE_WIDTH {
-                // Stop trying to draw if going off screen
-                if x_pos + col_offset >= DISPLAY_COLS {
-                    break;
-                };
-                // XOR the display bit with the value of the sprite at this index
-                // offset (tracked by shifting the sprite byte to the left)
-                self.display.xor(
-                    y_pos + row_offset,
-                    x_pos + col_offset,
-                    (sprite_byte & 0b10000000) == 0b10000000,
-                )?;
-                // Shift the sprite_byte, which will result in the bit of interest being
-                // at the most significant position
-                sprite_byte <<= 1;
+    /// Run the emulator
+    fn run(&mut self) -> Result<()> {
+        while !self.frontend.should_stop() {
+            self.frontend.draw(&self.display)?;
+            self.execute()?;
+            let sound_timer: u8;
+            {
+                sound_timer = *self.sound_timer.lock().unwrap()
             }
-            // Increment the memory index
-            cur_index += 1;
+            if sound_timer > 0 && !self.playing_sound {
+                self.frontend.play_sound()?;
+                self.playing_sound = true;
+            } else if sound_timer == 0 && self.playing_sound {
+                self.frontend.play_sound()?;
+                self.playing_sound = false;
+            }
         }
         Ok(())
-    }
-
-    /// Check if the `key` is currently pressed
-    ///
-    /// Key is a u8, representing one of the 0-F keys
-    /// mapped from
-    /// 1  2  3  4
-    /// Q  W  E  R
-    /// A  S  D  F
-    /// Z  X  C  V
-    /// to
-    /// 1  2  3  C
-    /// 4  5  6  D
-    /// 7  8  9  E
-    /// A  0  B  F
-    fn check_key(&mut self, key: u8) -> Result<bool> {
-        // If bounds check gaurunteed by the u8 passed in
-        Ok(self.frontend.check_key(key)?)
-    }
-
-    /// Jump to provided destination
-    fn jump(&mut self, dest: usize) -> Result<()> {
-        self.program_counter = dest;
-        Ok(())
-    }
-
-    /// Get the value in register `register`
-    fn get_reg(&self, register: usize) -> Result<u8> {
-        Ok(self
-            .registers
-            .get(register)
-            .context(format!("Trying to get value at register {register:#x}"))?
-            .to_owned())
-    }
-
-    /// Set the value in register `register` to `value`
-    fn set_reg(&mut self, register: usize, value: u8) -> Result<()> {
-        // Bounds check to indicate panic
-        if register >= NUM_REGISTERS {
-            bail!("Trying to get value at register {register:#x}")
-        }
-        self.registers[register] = value;
-        Ok(())
-    }
-
-    /// Add the value in register `register` to `value`
-    fn add_reg(&mut self, register: usize, value: u8) -> Result<()> {
-        // Bounds check to indicate panic
-        if register >= NUM_REGISTERS {
-            bail!("Trying to get value at register {register:#x}")
-        };
-        self.registers[register] += value;
-        Ok(())
-    }
-
-    /// Set the value of the index register
-    fn set_index(&mut self, value: u16) -> Result<()> {
-        self.index_register = value;
-        Ok(())
-    }
-
-    /// Get the value of the index register
-    fn get_index(&self) -> Result<u16> {
-        Ok(self.index_register)
-    }
-
-    /// Fetch the current instruction (incrementing the program counter appropriately)
-    fn fetch(&mut self) -> Result<(u8, u8)> {
-        let b1 = self
-            .memory
-            .get(self.program_counter)
-            .context("Trying to fetch first byte of instruction")?
-            .to_owned();
-        let b2 = self
-            .memory
-            .get(self.program_counter + 1)
-            .context("Trying to fetch second byte of instruction")?
-            .to_owned();
-        self.program_counter += INSTRUCTION_LENGTH;
-        Ok((b1, b2))
     }
 
     /// Execute a single instruction
@@ -633,5 +476,171 @@ impl Emulator {
             }
         };
         Ok(())
+    }
+    /// Add a value to the stack
+    fn stack_push(&mut self, value: u16) -> Result<()> {
+        *(self
+            .stack
+            .get_mut(self.stack_top)
+            .context("Stack overflow!")?) = value;
+        Ok(())
+    }
+
+    /// Pop the value off the top of the stack
+    fn stack_pop(&mut self) -> Result<u16> {
+        if self.stack_top == 0 {
+            bail!("Trying to pop from empty stack");
+        }
+        self.stack_top -= 1;
+        Ok(*(self
+            .stack
+            .get(self.stack_top)
+            .context("Invalid stack pointer")?))
+    }
+
+    /// Load the font into memory starting at FONT_START_POSITION
+    fn load_font(&mut self) -> Result<()> {
+        for (idx, byte) in (FONT_START_POSITION..(FONT_START_POSITION + FONT.len())).zip(FONT) {
+            *(self
+                .memory
+                .get_mut(idx)
+                .context("Trying to load font into emulator memory")?) = byte
+        }
+        Ok(())
+    }
+
+    /// Read a file, loads into memory starting at position 0x200 (512)
+    fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let contents = std::fs::read(path).context("Failed to read input file")?;
+        let mut memory_index: usize = 0x200;
+
+        // Iterate through the file, moving each byte into memory
+        for byte in contents {
+            *(self
+                .memory
+                .get_mut(memory_index)
+                .context("Insufficient memory to hold game file")?) = byte;
+            memory_index += 1;
+        }
+
+        Ok(())
+    }
+
+    /// Draw a sprite to the screen
+    ///
+    /// Starting from the byte in memory at sprite_index, with length/height sprite_length,
+    /// draw the sprite at the row given by y_pos, and the columns given by x_pos.
+    fn draw_sprite(
+        &mut self,
+        sprite_index: usize,
+        sprite_length: usize,
+        x_pos: usize,
+        y_pos: usize,
+    ) -> Result<()> {
+        let mut cur_index = sprite_index;
+        // The x and y coordinates are allowed to wrap
+        let x_pos = x_pos % DISPLAY_COLS;
+        let y_pos = y_pos % DISPLAY_ROWS;
+
+        // Loop through the sprite, xoring with the display bits
+        for row_offset in 0..sprite_length {
+            // If off bottom of screen, stop trying to draw
+            if y_pos + row_offset >= DISPLAY_ROWS {
+                break;
+            };
+            // Get the byte for the current row of the sprite
+            let mut sprite_byte = self
+                .memory
+                .get(cur_index)
+                .context("Trying to get byte in sprite")?
+                .to_owned();
+            for col_offset in 0..SPRITE_WIDTH {
+                // Stop trying to draw if going off screen
+                if x_pos + col_offset >= DISPLAY_COLS {
+                    break;
+                };
+                // XOR the display bit with the value of the sprite at this index
+                // offset (tracked by shifting the sprite byte to the left)
+                self.display.xor(
+                    y_pos + row_offset,
+                    x_pos + col_offset,
+                    (sprite_byte & 0b10000000) == 0b10000000,
+                )?;
+                // Shift the sprite_byte, which will result in the bit of interest being
+                // at the most significant position
+                sprite_byte <<= 1;
+            }
+            // Increment the memory index
+            cur_index += 1;
+        }
+        Ok(())
+    }
+
+    /// Check if the `key` is currently pressed
+    fn check_key(&mut self, key: u8) -> Result<bool> {
+        // If bounds check gaurunteed by the u8 passed in
+        self.frontend.check_key(key)
+    }
+
+    /// Jump to provided destination
+    fn jump(&mut self, dest: usize) -> Result<()> {
+        self.program_counter = dest;
+        Ok(())
+    }
+
+    /// Get the value in register `register`
+    fn get_reg(&self, register: usize) -> Result<u8> {
+        Ok(self
+            .registers
+            .get(register)
+            .context(format!("Trying to get value at register {register:#x}"))?
+            .to_owned())
+    }
+
+    /// Set the value in register `register` to `value`
+    fn set_reg(&mut self, register: usize, value: u8) -> Result<()> {
+        // Bounds check to indicate panic
+        if register >= NUM_REGISTERS {
+            bail!("Trying to get value at register {register:#x}")
+        }
+        self.registers[register] = value;
+        Ok(())
+    }
+
+    /// Add the value in register `register` to `value`
+    fn add_reg(&mut self, register: usize, value: u8) -> Result<()> {
+        // Bounds check to indicate panic
+        if register >= NUM_REGISTERS {
+            bail!("Trying to get value at register {register:#x}")
+        };
+        self.registers[register] += value;
+        Ok(())
+    }
+
+    /// Set the value of the index register
+    fn set_index(&mut self, value: u16) -> Result<()> {
+        self.index_register = value;
+        Ok(())
+    }
+
+    /// Get the value of the index register
+    fn get_index(&self) -> Result<u16> {
+        Ok(self.index_register)
+    }
+
+    /// Fetch the current instruction (incrementing the program counter appropriately)
+    fn fetch(&mut self) -> Result<(u8, u8)> {
+        let b1 = self
+            .memory
+            .get(self.program_counter)
+            .context("Trying to fetch first byte of instruction")?
+            .to_owned();
+        let b2 = self
+            .memory
+            .get(self.program_counter + 1)
+            .context("Trying to fetch second byte of instruction")?
+            .to_owned();
+        self.program_counter += INSTRUCTION_LENGTH;
+        Ok((b1, b2))
     }
 }
