@@ -7,13 +7,10 @@ use std::time::{Duration, Instant};
 // External uses
 use anyhow::{Context, Result, bail};
 use rand::{self, RngCore};
-use raylib::{RaylibHandle, ffi::KeyboardKey};
 
-// Display Constants
-const DISPLAY_ROWS: usize = 32;
-const DISPLAY_COLS: usize = 64;
-const COL_STRIDE: usize = 1;
-const ROW_STRIDE: usize = DISPLAY_COLS;
+// Crate uses
+use crate::display::{DISPLAY_COLS, DISPLAY_ROWS, Display};
+use crate::frontend::Frontend;
 
 // Emulator constants
 const MAX_STACK_SIZE: usize = 128;
@@ -49,91 +46,11 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-// mapped from
-// 1  2  3  4
-// Q  W  E  R
-// A  S  D  F
-// Z  X  C  V
-// to
-// 1  2  3  C
-// 4  5  6  D
-// 7  8  9  E
-// A  0  B  F
-const KEYMAP: [KeyboardKey; 16] = [
-    KeyboardKey::KEY_X,
-    KeyboardKey::KEY_ONE,
-    KeyboardKey::KEY_TWO,
-    KeyboardKey::KEY_THREE,
-    KeyboardKey::KEY_Q,
-    KeyboardKey::KEY_W,
-    KeyboardKey::KEY_E,
-    KeyboardKey::KEY_A,
-    KeyboardKey::KEY_S,
-    KeyboardKey::KEY_D,
-    KeyboardKey::KEY_Z,
-    KeyboardKey::KEY_C,
-    KeyboardKey::KEY_FOUR,
-    KeyboardKey::KEY_R,
-    KeyboardKey::KEY_F,
-    KeyboardKey::KEY_V,
-];
+struct EmulatorConfig {}
 
-// NOTE: This may be replaces with underlying bitvec to save space eventually
-
-/// A boolean array representing the state of the display
-pub(crate) struct Display {
-    /// Underlying data representing the display (row major matrix)
-    data: [bool; DISPLAY_ROWS * DISPLAY_COLS],
-    /// Whether the display needs to be redrawn
-    needs_redraw: bool,
-}
-
-impl Display {
-    /// Create an empty display
-    fn new() -> Self {
-        Display {
-            data: [false; DISPLAY_ROWS * DISPLAY_COLS],
-            needs_redraw: false,
-        }
-    }
-
-    /// Set a value in the display
-    fn set(&mut self, row: usize, col: usize, val: bool) -> Result<()> {
-        let el = self
-            .data
-            .get_mut(row * ROW_STRIDE + col * COL_STRIDE)
-            .context("Tried to index past display bounds!")?;
-        *el = val;
-        Ok(())
-    }
-
-    /// Get the element of the display at the specified row and column
-    fn get(&self, row: usize, col: usize) -> Result<bool> {
-        return Ok(*(self
-            .data
-            .get(row * ROW_STRIDE + col * COL_STRIDE)
-            .context("Tried to index past display bounds!")?));
-    }
-
-    /// XOR the element at the specified row and column
-    fn xor(&mut self, row: usize, col: usize, val: bool) -> Result<()> {
-        let el = self
-            .data
-            .get_mut(row * ROW_STRIDE + col * COL_STRIDE)
-            .context("Tried to index past display bounds!")?;
-        *el ^= val;
-        Ok(())
-    }
-
-    /// Return an iterator over the elements of the display
-    fn iter(&self) -> std::slice::Iter<'_, bool> {
-        self.data.iter()
-    }
-
-    /// Clear the display (set every pixel to 0)
-    fn clear(&mut self) -> Result<()> {
-        self.data.fill(false);
-        Ok(())
+impl Default for EmulatorConfig {
+    fn default() -> Self {
+        Self {}
     }
 }
 
@@ -165,7 +82,9 @@ pub(crate) struct Emulator {
     /// Channel to the ticker thread
     ticker_channel: Option<mpsc::Sender<()>>,
     /// Handle for performing Raylib operations
-    raylib: RaylibHandle,
+    frontend: Box<dyn Frontend>,
+    /// Configuration object
+    config: EmulatorConfig,
     /// Random number generator
     rng: rand::prelude::ThreadRng,
 }
@@ -186,7 +105,7 @@ impl Drop for Emulator {
 
 impl Emulator {
     /// Create a new Emulator with zeroed fields
-    fn new(raylib: RaylibHandle) -> Result<Self> {
+    fn new(frontend: Box<dyn Frontend>, config: EmulatorConfig) -> Result<Self> {
         // Create the sound and delay timers
         let delay_timer = Arc::new(Mutex::new(0u8));
         let sound_timer = Arc::new(Mutex::new(0u8));
@@ -256,7 +175,8 @@ impl Emulator {
             sound_timer,
             ticker_handle: Some(ticker_handle),
             ticker_channel: Some(sender),
-            raylib,
+            frontend,
+            config,
             rng,
         };
         emulator.load_font().context("Trying to create emulator")?;
@@ -375,9 +295,9 @@ impl Emulator {
     /// 4  5  6  D
     /// 7  8  9  E
     /// A  0  B  F
-    fn check_key(&self, key: u8) -> Result<bool> {
+    fn check_key(&mut self, key: u8) -> Result<bool> {
         // If bounds check gaurunteed by the u8 passed in
-        Ok(self.raylib.is_key_down(KEYMAP[key as usize]))
+        Ok(self.frontend.check_key(key)?)
     }
 
     /// Jump to provided destination
@@ -634,9 +554,9 @@ impl Emulator {
             (0xF, x, 0x0, 0xA) => {
                 let mut key_pressed = None;
                 // Check if any of the keys are pressed
-                for (key_val, keyboardkey) in KEYMAP.iter().enumerate() {
-                    if self.raylib.is_key_down(*keyboardkey) {
-                        key_pressed = Some(key_val);
+                for key in 0x0..=0xF {
+                    if self.frontend.check_key(key)? {
+                        key_pressed = Some(key);
                         break;
                     }
                 }
@@ -644,7 +564,7 @@ impl Emulator {
                     Some(key) => {
                         // NOTE: Key is garunteed to fit into u8 since the length of the
                         // array is only 16
-                        self.set_reg(x.into(), key.try_into()?)?;
+                        self.set_reg(x.into(), key)?;
                     }
                     None => {
                         // Set the program counter back to the start of this instruction
