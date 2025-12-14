@@ -3,12 +3,16 @@ pub mod display;
 pub mod emulator;
 pub mod frontend;
 // Front end implementations
+#[cfg(test)]
+mod noop_frontend;
 #[cfg(feature = "raylib")]
 mod raylib_frontend;
-use std::path::PathBuf;
 
 #[cfg(feature = "raylib")]
 use raylib::core::audio;
+
+// Standard Library Use
+use std::path::PathBuf;
 
 // External crate uses
 use anyhow::Result;
