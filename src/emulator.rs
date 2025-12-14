@@ -257,7 +257,7 @@ impl<'a> Emulator<'a> {
         let nib_y = (instruction_byte2 & 0xF0) >> 4; // Used for register address
         let nib_n = instruction_byte2 & 0x0F; // 4 bit number
         // Other bit combinations used, not really nibbles but convenient prefix
-        let nib_nn = (nib_x << 4) | nib_y; // 8-bit immediate number (not index)
+        let nib_nn = instruction_byte2; // 8-bit immediate number (not index)
         let nib_nnn: u16 = ((nib_x as u16) << 8) | ((nib_y as u16) << 4) | (nib_n as u16);
         // Match on the instruction (breaking it down by half-bytes as that
         // is how instructions are distinguished)
@@ -314,13 +314,15 @@ impl<'a> Emulator<'a> {
             }
             // ADD TO REGISTER
             (0x7, x, ..) => {
-                self.add_reg(x as usize, nib_nn)?;
+                let vx = self.get_reg(x)?;
+                let (res, _) = vx.overflowing_add(nib_nn);
+                self.set_reg(x as usize, res)?;
             }
             // ARITHMETIC/LOGICAL OPERATIONS
             // SET
             (0x8, x, y, 0x0) => {
-                let vy_val = self.get_reg(y)?;
-                self.set_reg(x as usize, vy_val)?;
+                let vy = self.get_reg(y)?;
+                self.set_reg(x as usize, vy)?;
             }
             // BINARY REGISTER OPS
             (0x8, x, y, n) => {
@@ -655,15 +657,15 @@ impl<'a> Emulator<'a> {
         Ok(())
     }
 
-    /// Add the value in register `register` to `value`
-    fn add_reg(&mut self, register: usize, value: u8) -> Result<()> {
-        // Bounds check to indicate panic
-        if register >= NUM_REGISTERS {
-            bail!("Trying to get value at register {register:#x}")
-        };
-        self.registers[register] += value;
-        Ok(())
-    }
+    // /// Add the value in register `register` to `value`
+    // fn add_reg(&mut self, register: usize, value: u8) -> Result<()> {
+    //     // Bounds check to indicate panic
+    //     if register >= NUM_REGISTERS {
+    //         bail!("Trying to get value at register {register:#x}")
+    //     };
+    //     self.registers[register] += value;
+    //     Ok(())
+    // }
 
     /// Set the value of the index register
     fn set_index(&mut self, value: u16) -> Result<()> {
@@ -784,6 +786,33 @@ mod test_emulator {
         {
             let instruction1 = (0x1 << 4) | jump_dest >> 8;
             let instruction2 = jump_dest & 0xFF;
+
+            test_emul8r.memory[test_emul8r.program_counter] = instruction1 as u8;
+            test_emul8r.memory[test_emul8r.program_counter + 1] = instruction2 as u8;
+        }
+        // Run the single instruction
+        test_emul8r.execute()?;
+
+        // Check that the program counter has been set to 1012
+        assert_eq!(test_emul8r.program_counter, jump_dest as usize);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test subroutines
+    fn test_subroutines() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let jump_dest = 1012u16;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the first instruction to be subroutine jump
+        #[allow(clippy::identity_op)]
+        {
+            let instruction1 = (0x2 << 4) | jump_dest >> 8;
+            let instruction2 = jump_dest & 0xFF;
             println!("Jump dest is {:b}", jump_dest);
             println!("Instruction1 is {:b}", instruction1);
             println!("Instruction2 is {:b}", instruction2);
@@ -794,8 +823,328 @@ mod test_emulator {
         // Run the single instruction
         test_emul8r.execute()?;
 
-        // Check that the program counter has been set to 1012
+        // Check that the emulator did jump
         assert_eq!(test_emul8r.program_counter, jump_dest as usize);
+        // Check that the previous position was put onto the stack
+        assert_eq!(
+            test_emul8r.stack[test_emul8r.stack_top - 1],
+            initial_position as u16 + 2 // NOTE: Advanced due to stepping through instruction
+        );
+
+        // Set the instruction currently pointed to to be return
+        #[allow(clippy::identity_op)]
+        {
+            let instruction1 = (0x0 << 4) | 0x0;
+            let instruction2 = (0xE << 4) | 0xE;
+
+            test_emul8r.memory[test_emul8r.program_counter] = instruction1 as u8;
+            test_emul8r.memory[test_emul8r.program_counter + 1] = instruction2 as u8;
+        }
+        test_emul8r.execute()?;
+
+        // Check that the emulator did return
+        // // NOTE:+2 due to stepping counter
+        assert_eq!(test_emul8r.program_counter, initial_position + 2);
+
+        // Check that the stack has been emptied
+        assert_eq!(test_emul8r.stack_top, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test conditional jump instruction 0x3 (jump if equal)
+    fn test_unary_conditional_jump_equal_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register: u8 = 0x5;
+        let check_val = 0x9;
+        let byte1 = (0x3 << 4) | register;
+        let byte2 = check_val;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the register to match the check_val
+        test_emul8r.set_reg(register.into(), check_val)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump occured
+        assert_eq!(test_emul8r.program_counter, initial_position + 4);
+        Ok(())
+    }
+    #[test]
+    /// Test conditional jump instruction 0x3 (jump if equal)
+    fn test_unary_conditional_jump_equal_no_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register: u8 = 0x5;
+        let check_val = 0x9;
+        let byte1 = (0x3 << 4) | register;
+        let byte2 = check_val;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the register to NOT match the check_val
+        test_emul8r.set_reg(register.into(), check_val + 1)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump didn't occur
+        assert_eq!(test_emul8r.program_counter, initial_position + 2);
+        Ok(())
+    }
+    #[test]
+    /// Test conditional jump instruction 0x4 (jump if not equal)
+    fn test_unary_conditional_jump_not_equal_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register: u8 = 0x5;
+        let check_val = 0x9;
+        let byte1 = (0x4 << 4) | register;
+        let byte2 = check_val;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the register to NOT match the check_val
+        test_emul8r.set_reg(register.into(), check_val + 1)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump occured
+        assert_eq!(test_emul8r.program_counter, initial_position + 4);
+        Ok(())
+    }
+    #[test]
+    /// Test conditional jump instruction 0x4 (jump if equal)
+    fn test_unary_conditional_jump_not_equal_no_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register: u8 = 0x5;
+        let check_val = 0x9;
+        let byte1 = (0x4 << 4) | register;
+        let byte2 = check_val;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the register to match the check_val
+        test_emul8r.set_reg(register.into(), check_val)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump didn't occur
+        assert_eq!(test_emul8r.program_counter, initial_position + 2);
+        Ok(())
+    }
+
+    #[test]
+    /// Test condition jump instruction 0x5 (check if registers equal)
+    fn test_binary_conditional_jump_equal_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register1: u8 = 0x5;
+        let register2: u8 = 0x8;
+        let check_val = 0x9;
+        let byte1 = (0x5 << 4) | register1;
+        let byte2 = register2 << 4;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the registers to match the check_val
+        test_emul8r.set_reg(register1.into(), check_val)?;
+        test_emul8r.set_reg(register2.into(), check_val)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump occured
+        assert_eq!(test_emul8r.program_counter, initial_position + 4);
+        Ok(())
+    }
+
+    #[test]
+    /// Test condition jump instruction 0x5 (check if registers equal)
+    fn test_binary_conditional_jump_equal_no_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register1: u8 = 0x5;
+        let register2: u8 = 0x8;
+        let check_val = 0x9;
+        let byte1 = (0x5 << 4) | register1;
+        let byte2 = register2 << 4;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the registers to not match
+        test_emul8r.set_reg(register1.into(), check_val)?;
+        test_emul8r.set_reg(register2.into(), check_val + 1)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump didn't occur
+        assert_eq!(test_emul8r.program_counter, initial_position + 2);
+        Ok(())
+    }
+
+    #[test]
+    /// Test condition jump instruction 0x9 (check if registers NOT equal)
+    fn test_binary_conditional_jump_not_equal_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register1: u8 = 0x5;
+        let register2: u8 = 0x8;
+        let check_val = 0x9;
+        let byte1 = (0x9 << 4) | register1;
+        let byte2 = register2 << 4;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the registers to NOT match
+        test_emul8r.set_reg(register1.into(), check_val)?;
+        test_emul8r.set_reg(register2.into(), check_val + 1)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump occured
+        assert_eq!(test_emul8r.program_counter, initial_position + 4);
+        Ok(())
+    }
+
+    #[test]
+    /// Test condition jump instruction 0x9 (check if registers NOT equal)
+    fn test_binary_conditional_jump_not_equal_no_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let initial_position = test_emul8r.program_counter;
+
+        // Set the current instruction to be a conditional jump (version 0x3)
+        let register1: u8 = 0x5;
+        let register2: u8 = 0x8;
+        let check_val = 0x9;
+        let byte1 = (0x9 << 4) | register1;
+        let byte2 = register2 << 4;
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        // Set the registers to match
+        test_emul8r.set_reg(register1.into(), check_val)?;
+        test_emul8r.set_reg(register2.into(), check_val)?;
+
+        // Execute the instruction
+        test_emul8r.execute()?;
+
+        // Check that a jump didn't occur
+        assert_eq!(test_emul8r.program_counter, initial_position + 2);
+        Ok(())
+    }
+
+    #[test]
+    /// Test setting a register
+    fn test_set_register() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let register: u8 = 0x5;
+        let value: u8 = 0xF;
+
+        let byte1 = (0x6 << 4) | register;
+        let byte2 = value;
+
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        test_emul8r.execute()?;
+
+        assert_eq!(test_emul8r.get_reg(register)?, value);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test adding a value to a register
+    fn test_add_register() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let register: u8 = 0x5;
+        let value: u8 = 0x2;
+        let to_add: u8 = 0x3;
+
+        test_emul8r.set_reg(register as usize, value)?;
+
+        let byte1 = (0x7 << 4) | register;
+        let byte2 = to_add;
+
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        test_emul8r.execute()?;
+
+        assert_eq!(test_emul8r.get_reg(register)?, value + to_add);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test setting one register to the value of another
+    fn test_set_register_to_register() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+
+        let x: u8 = 0x2;
+        let y: u8 = 0xF;
+        let vx: u8 = 0x9;
+        let vy: u8 = 0x2;
+
+        let byte1 = (0x8 << 4) | x;
+        let byte2 = y << 4;
+
+        test_emul8r.memory[test_emul8r.program_counter] = byte1;
+        test_emul8r.memory[test_emul8r.program_counter + 1] = byte2;
+
+        test_emul8r.registers[x as usize] = vx;
+        test_emul8r.registers[y as usize] = vy;
+
+        test_emul8r.execute()?;
+
+        assert_eq!(test_emul8r.registers[x as usize], vy);
+        assert_eq!(test_emul8r.registers[y as usize], vy);
 
         Ok(())
     }
