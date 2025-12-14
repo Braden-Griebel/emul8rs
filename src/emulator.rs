@@ -55,7 +55,7 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
 /// Chip8 Emulator
 pub(crate) struct Emulator<'a> {
     /// Memory including program memory and ram
-    memory: Vec<u8>,
+    memory: [u8; MEMORY_SIZE],
     /// Representation of the display (actual drawing handled in [crate::artist])
     display: Display,
     /// Pointer to current instruction (indexes memory)
@@ -158,9 +158,9 @@ impl<'a> Emulator<'a> {
             }
         });
 
-        // Create the empty memory, add the font characters
+        // Create the empty memory, initialized to 0
         debug!("Initializing memory");
-        let memory: Vec<u8> = Vec::with_capacity(MEMORY_SIZE);
+        let memory = [0u8; 4096];
 
         // Create the empty display
         debug!("Creating emulator internal display");
@@ -230,7 +230,7 @@ impl<'a> Emulator<'a> {
     /// Read a file, loads into memory starting at position 0x200 (512)
     pub fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let contents = std::fs::read(path).context("Failed to read input file")?;
-        self.load_bytes(&contents)?;
+        self.load_bytes(&contents, GAME_MEMORY_START)?;
         Ok(())
     }
 
@@ -547,9 +547,8 @@ impl<'a> Emulator<'a> {
         Ok(())
     }
 
-    fn load_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        let mut memory_index: usize = GAME_MEMORY_START;
-
+    fn load_bytes(&mut self, bytes: &[u8], start_position: usize) -> Result<()> {
+        let mut memory_index = start_position;
         // Iterate through the file, moving each byte into memory
         for &byte in bytes {
             *(self
