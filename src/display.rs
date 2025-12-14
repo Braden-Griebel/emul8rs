@@ -16,6 +16,12 @@ pub struct Display {
     pub needs_redraw: bool,
 }
 
+impl Default for Display {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Display {
     /// Create an empty display
     pub fn new() -> Self {
