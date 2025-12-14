@@ -353,42 +353,41 @@ impl<'a> Emulator<'a> {
                     0x4 => {
                         trace!("Add with overflow");
                         let (res, carry) = vx.overflowing_add(vy);
+                        self.set_reg(x as usize, res)?;
                         self.set_reg(0xF, carry.into())?;
-                        self.set_reg(x as usize, res)?
                     }
                     0x5 => {
                         trace!("Sub with overflow VX - VY");
                         let (res, carry) = vx.overflowing_sub(vy);
+                        self.set_reg(x as usize, res)?;
                         self.set_reg(0xF, (!carry).into())?;
-                        self.set_reg(x as usize, res)?
                     }
                     0x7 => {
                         trace!("Sub with overflow VY - VX");
                         let (res, carry) = vy.overflowing_sub(vx);
+                        self.set_reg(x as usize, res)?;
                         self.set_reg(0xF, (!carry).into())?;
-                        self.set_reg(x as usize, res)?
                     }
                     0x6 | 0xE => {
                         trace!("Shift operations");
-                        let shift_right = n == 0x6;
                         // NOTE: Setting VX to VY is different between COSMAC and CHIP-48
-                        let shift_target = if self.config.shift_use_vy { vy } else { vx };
-                        // Shift register to the right
-                        let dropped_bit =
-                            shift_target & if shift_right { 0b00000001 } else { 0b10000000 };
-                        // Set VX to shifted value
-                        self.set_reg(
-                            x as usize,
-                            if shift_right {
-                                trace!("Shifting right");
-                                shift_target >> 1
-                            } else {
-                                trace!("Shifting left");
-                                shift_target << 1
-                            },
-                        )?;
-                        // Set flag register to dropped bit
-                        self.set_reg(0xFusize, dropped_bit)?;
+                        if self.config.shift_use_vy {
+                            self.set_reg(x as usize, self.get_reg(y)?)?;
+                        }
+                        let vx = self.get_reg(x)?;
+                        match n {
+                            0x6 => {
+                                self.set_reg(x as usize, vx >> 1)?;
+                                self.set_reg(0xF, vx & 0x1)?;
+                            }
+                            0xE => {
+                                self.set_reg(x as usize, vx << 1)?;
+                                self.set_reg(0xF, vx >> 7)?;
+                            }
+                            _ => {
+                                unreachable!()
+                            }
+                        }
                     }
                     _ => bail!("Unimplemented binary register operation {:#x}", n),
                 }
