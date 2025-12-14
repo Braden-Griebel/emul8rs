@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 pub mod config;
 pub mod display;
 pub mod emulator;
@@ -14,10 +13,10 @@ use raylib::core::audio;
 // External crate uses
 use anyhow::Result;
 use clap::Parser;
+use colog::basic_builder;
+use log::{LevelFilter, debug, info};
 
-// Interal uses
-use confy;
-
+// Internal crate uses
 use crate::config::EmulatorConfig;
 
 // CLI struct
@@ -38,6 +37,10 @@ struct Cli {
     /// Sets a custom configuration file
     #[arg(short, long, value_name = "CONFIG")]
     config: Option<PathBuf>,
+
+    /// Turn on logging
+    #[arg(short, long)]
+    logging: u8,
 
     /// Foreground color (as unprefixed hexstring, e.g. FFFFFF)
     #[arg(short, long)]
@@ -71,7 +74,22 @@ fn main() -> Result<()> {
     // Get command line arguments
     let args = Cli::parse();
 
+    // Setup logging
+    let level_filter = match args.logging {
+        0 => LevelFilter::Error,
+        1 => LevelFilter::Warn,
+        2 => LevelFilter::Info,
+        3 => LevelFilter::Debug,
+        _ => LevelFilter::Trace,
+    };
+
+    basic_builder()
+        .default_format()
+        .filter_level(level_filter)
+        .init();
+
     // Get configuration
+    info!("Getting configuration from file");
     let mut emulator_config: EmulatorConfig;
     match args.config {
         Some(path) => {
@@ -81,8 +99,13 @@ fn main() -> Result<()> {
             emulator_config = confy::load("emul8rs", None)?;
         }
     };
+    info!(
+        "Default config file path: {:?}",
+        confy::get_configuration_file_path("emul8rs", None)?
+    );
 
     // Update config values if needed
+    debug!("Updating config values with command line arguments");
     if let Some(foreground) = args.foreground.as_deref() {
         emulator_config.foreground = foreground.to_string();
     }
@@ -102,18 +125,27 @@ fn main() -> Result<()> {
         emulator_config.store_memory_update_index = update_index;
     }
 
+    info!("Setting up frontend");
     cfg_if::cfg_if! {
         if #[cfg(feature = "raylib")]{
+            info!("Setting up raylib");
             // Create the audio device the front end will use
+            info!("Intializing the audio device");
             let raylib_audio = audio::RaylibAudio::init_audio_device()?;
             // Create the actual raylib frontend
+            debug!("Initializing the raylib frontend");
             let frontend = raylib_frontend::RaylibFrontend::new(&emulator_config, &raylib_audio)?;
             // Create the emulator using the raylib front end
+            info!("Initializing emulator");
             let mut emulator = emulator::Emulator::new(Box::new(frontend), emulator_config)?;
+            info!("Loading game file");
+            emulator.load_file(args.program)?;
             // Actually run the emulator using the raylib front end
+            info!("Running the emulator");
             emulator.run()?;
 
         } else {
+            warn!("No available fronends, exiting");
             println!("No Available Frontends!")
         }
     }

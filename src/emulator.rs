@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 // External uses
 use anyhow::{Context, Result, bail};
+use log::debug;
 use rand::{self, RngCore};
 
 // Crate uses
@@ -15,6 +16,7 @@ use crate::frontend::Frontend;
 
 // Emulator constants
 const MAX_STACK_SIZE: usize = 128;
+const MEMORY_SIZE: usize = 4096;
 const NUM_REGISTERS: usize = 16;
 const MILLIS_PER_SECOND: u64 = 1_000;
 const MICROS_PER_SECOND: u64 = 1_000_000;
@@ -91,6 +93,7 @@ impl<'a> Drop for Emulator<'a> {
     /// Drop the emulator (just stops the counter thread)
     fn drop(&mut self) {
         // Send the stop to the ticker
+        debug!("Stopping timer thread");
         if let Some(channel) = &self.ticker_channel {
             channel.send(()).expect("Failed to stop ticker thread");
         }
@@ -105,14 +108,17 @@ impl<'a> Emulator<'a> {
     /// Create a new Emulator with zeroed fields
     pub fn new(frontend: Box<dyn Frontend + 'a>, config: config::EmulatorConfig) -> Result<Self> {
         // Create the sound and delay timers
+        debug!("Creating timers");
         let delay_timer = Arc::new(Mutex::new(0u8));
         let sound_timer = Arc::new(Mutex::new(0u8));
 
         // Create the ticker which will decrement the delay and sound timer
         // Create the channel for sending th stop command
+        debug!("Creating channel for stopping the timer");
         let (sender, reciever) = mpsc::channel();
 
         // Clone the delay and sound timer references to move them into the other thread
+        debug!("Starting timer thread");
         let tickers_delay_timer_ref = delay_timer.clone();
         let tickers_sound_timer_ref = sound_timer.clone();
         let ticker_handle = thread::spawn(move || {
@@ -153,17 +159,25 @@ impl<'a> Emulator<'a> {
         });
 
         // Create the empty memory, add the font characters
-        let memory: Vec<u8> = Vec::with_capacity(4096);
+        debug!("Initializing memory");
+        let memory: Vec<u8> = Vec::with_capacity(MEMORY_SIZE);
 
         // Create the empty display
+        debug!("Creating emulator internal display");
         let display = Display::new();
 
         // Create the RNG to use for randomness
+        debug!("Creating the RNG");
         let rng = rand::rng();
 
         // Determine how long the execution steps should take
         let step_duration = Duration::from_micros(MICROS_PER_SECOND / 700);
+        debug!(
+            "Determined step duration to be {:?} microseconds",
+            step_duration
+        );
 
+        debug!("Creating emulator object");
         let mut emulator = Self {
             memory,
             display,
@@ -182,12 +196,14 @@ impl<'a> Emulator<'a> {
             rng,
             step_duration,
         };
+        debug!("Loading font into emulator");
         emulator.load_font().context("Trying to load font")?;
         Ok(emulator)
     }
 
     /// Run the emulator
     pub fn run(&mut self) -> Result<()> {
+        debug!("Starting main emulation loop");
         while !self.frontend.should_stop() {
             // get the time at the start of the loop
             let start_time = Instant::now();
@@ -208,6 +224,13 @@ impl<'a> Emulator<'a> {
             // Sleep long enough to match the instructions per second
             thread::sleep(self.step_duration.saturating_sub(stop_time - start_time));
         }
+        Ok(())
+    }
+
+    /// Read a file, loads into memory starting at position 0x200 (512)
+    pub fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let contents = std::fs::read(path).context("Failed to read input file")?;
+        self.load_bytes(&contents)?;
         Ok(())
     }
 
@@ -524,20 +547,17 @@ impl<'a> Emulator<'a> {
         Ok(())
     }
 
-    /// Read a file, loads into memory starting at position 0x200 (512)
-    fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let contents = std::fs::read(path).context("Failed to read input file")?;
-        let mut memory_index: usize = 0x200;
+    fn load_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let mut memory_index: usize = GAME_MEMORY_START;
 
         // Iterate through the file, moving each byte into memory
-        for byte in contents {
+        for &byte in bytes {
             *(self
                 .memory
                 .get_mut(memory_index)
                 .context("Insufficient memory to hold game file")?) = byte;
             memory_index += 1;
         }
-
         Ok(())
     }
 

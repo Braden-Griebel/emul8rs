@@ -1,3 +1,4 @@
+use log::debug;
 use raylib::{
     RaylibHandle, RaylibThread,
     audio::{RaylibAudio, Sound, Wave},
@@ -42,7 +43,7 @@ const KEYMAP: [KeyboardKey; 16] = [
 ];
 
 // Sound file to include
-const BEEP_SOUND: &[u8; 63128] = include_bytes!("../resources/beep.wav");
+const BEEP_SOUND: &[u8; 63128] = include_bytes!("../resources/sound/beep.wav");
 
 // Window size defaults
 const WINDOW_WIDTH: i32 = 640;
@@ -52,7 +53,7 @@ const WINDOW_HEIGHT: i32 = 480;
 pub struct RaylibFrontend<'a> {
     handle: RaylibHandle,
     thread: RaylibThread,
-    wave: Wave<'a>,
+    // wave: Wave<'a>,
     sound: Sound<'a>,
     playing_sound: bool,
     window_width: i32,
@@ -64,25 +65,36 @@ pub struct RaylibFrontend<'a> {
 impl<'a> RaylibFrontend<'a> {
     /// Create a new raylib frontend struct from a raylib handle
     pub fn new(config: &config::EmulatorConfig, audio: &'a RaylibAudio) -> Result<Self> {
+        debug!("Creating rayling window");
         let (handle, thread) = raylib::init()
             .size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .title("Emul8rs")
             .build();
+        debug!("Checking actual window size");
+        let window_width = handle.get_screen_width();
+        let window_height = handle.get_screen_height();
+        debug!(
+            "Created window width: {}, height: {}",
+            window_width, window_height
+        );
+        debug!("Loading sound file from memory");
         let wave: Wave<'a> = audio.new_wave_from_memory(".wav", BEEP_SOUND)?;
         let sound: Sound<'a> = audio.new_sound_from_wave(&wave)?;
         // Create the colors form the config hex strings
+        debug!("Creating raylib colors from passed hex values");
         let foreground = Color::from_hex(&config.foreground)
             .context("Parsing foreground color from hex string")?;
         let background = Color::from_hex(&config.background)
             .context("Parsing backgorund color from hex string")?;
+        debug!("Creating frontend");
         Ok(Self {
             handle,
             thread,
-            wave,
+            // wave,
             sound,
             playing_sound: true,
-            window_width: WINDOW_WIDTH,
-            window_height: WINDOW_HEIGHT,
+            window_width,
+            window_height,
             foreground,
             background,
         })
@@ -93,8 +105,8 @@ impl Frontend for RaylibFrontend<'_> {
     fn draw(&mut self, display: &Display) -> anyhow::Result<()> {
         // Check window sizing
         if self.handle.is_window_resized() {
-            self.window_width = self.handle.get_render_width();
-            self.window_height = self.handle.get_render_height();
+            self.window_width = self.handle.get_screen_width();
+            self.window_height = self.handle.get_screen_height();
         }
         // Get the sizes of the individual cells
         let cell_width = self.window_width / (DISPLAY_COLS as i32);
