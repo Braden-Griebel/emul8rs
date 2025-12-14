@@ -65,7 +65,7 @@ pub struct RaylibFrontend<'a> {
 impl<'a> RaylibFrontend<'a> {
     /// Create a new raylib frontend struct from a raylib handle
     pub fn new(config: &config::EmulatorConfig, audio: &'a RaylibAudio) -> Result<Self> {
-        debug!("Creating rayling window");
+        debug!("Creating raylib window");
         let (handle, thread) = raylib::init()
             .size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .title("Emul8rs")
