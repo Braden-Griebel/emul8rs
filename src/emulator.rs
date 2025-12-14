@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 // External uses
 use anyhow::{Context, Result, bail};
-use log::debug;
+use log::{debug, warn};
 use rand::{self, RngCore};
 
 // Crate uses
@@ -50,7 +50,7 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-//NOTE: For the memory, the programs will be loaded starting at adress 512
+//NOTE: For the memory, the programs will be loaded starting at address 512
 
 /// Chip8 Emulator
 pub(crate) struct Emulator<'a> {
@@ -115,7 +115,7 @@ impl<'a> Emulator<'a> {
         // Create the ticker which will decrement the delay and sound timer
         // Create the channel for sending th stop command
         debug!("Creating channel for stopping the timer");
-        let (sender, reciever) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
 
         // Clone the delay and sound timer references to move them into the other thread
         debug!("Starting timer thread");
@@ -131,10 +131,10 @@ impl<'a> Emulator<'a> {
 
             loop {
                 // Check if the thread has received a message (all messages are stops)
-                match reciever.try_recv() {
+                match receiver.try_recv() {
                     Ok(_) => return, // Stop signal received
                     Err(mpsc::TryRecvError::Empty) => {
-                        // No message recieved, fire the ticker
+                        // No message received, fire the ticker
                         if ticker.elapsed() >= period {
                             // Decrement the timers
                             {
@@ -211,7 +211,7 @@ impl<'a> Emulator<'a> {
             self.execute()?;
             let sound_timer: u8;
             {
-                sound_timer = *self.sound_timer.lock().unwrap()
+                sound_timer = *self.sound_timer.lock().unwrap();
             }
             if sound_timer > 0 && !self.playing_sound {
                 self.frontend.play_sound()?;
@@ -244,7 +244,7 @@ impl<'a> Emulator<'a> {
         let nib_x = instruction_byte1 & 0x0F; // Used for register address
         let nib_y = (instruction_byte2 & 0xF0) >> 4; // Used for register address
         let nib_n = instruction_byte2 & 0x0F; // 4 bit number
-        // Other bit combinations used, not really nibbles but convienient prefix
+        // Other bit combinations used, not really nibbles but convenient prefix
         let nib_nn = (nib_x << 4) | nib_y; // 8-bit immediate number (not index)
         let nib_nnn: u16 = ((nib_x as u16) << 8) | ((nib_y as u16) << 4) | (nib_n as u16);
         // Match on the instruction (breaking it down by half-bytes as that
@@ -261,7 +261,7 @@ impl<'a> Emulator<'a> {
             }
             // SUBROUTINE
             (0x2, ..) => {
-                // Push pc onto stack for returning from subrouting
+                // Push pc onto stack for returning from subroutine
                 self.stack_push(self.program_counter as u16)?;
                 // Jump to destination
                 self.jump(nib_nnn as usize)?;
@@ -357,9 +357,8 @@ impl<'a> Emulator<'a> {
             }
             // SET INDEX REGISTER
             (0xA, ..) => self.set_index(nib_nnn)?,
-            // JUMP OFFSET
+            // JUMP WITH OFFSET
             (0xB, x, ..) => {
-                // TODO: Allow configuration of behavior,
                 // COSMAC jumped to NNN+V0, later jumped to NN+VX
                 let dest = if self.config.jump_offset_use_v0 {
                     nib_nnn + self.get_reg(0x0)? as u16
@@ -437,7 +436,7 @@ impl<'a> Emulator<'a> {
                 }
                 match key_pressed {
                     Some(key) => {
-                        // NOTE: Key is garunteed to fit into u8 since the length of the
+                        // NOTE: Key is guaranteed to fit into u8 since the length of the
                         // array is only 16
                         self.set_reg(x.into(), key)?;
                     }
@@ -510,7 +509,7 @@ impl<'a> Emulator<'a> {
                 }
             }
             (other, ..) => {
-                bail!("Instruction {other:#x} not implemented")
+                warn!("Instruction {other:#x} not implemented");
             }
         };
         Ok(())
@@ -538,13 +537,8 @@ impl<'a> Emulator<'a> {
 
     /// Load the font into memory starting at FONT_START_POSITION
     fn load_font(&mut self) -> Result<()> {
-        for (idx, byte) in (FONT_START_POSITION..(FONT_START_POSITION + FONT.len())).zip(FONT) {
-            *(self
-                .memory
-                .get_mut(idx)
-                .context("Trying to load font into emulator memory")?) = byte
-        }
-        Ok(())
+        self.load_bytes(&FONT, FONT_START_POSITION)
+            .context("Loading font into memory")
     }
 
     fn load_bytes(&mut self, bytes: &[u8], start_position: usize) -> Result<()> {
@@ -576,7 +570,7 @@ impl<'a> Emulator<'a> {
         let x_pos = x_pos % DISPLAY_COLS;
         let y_pos = y_pos % DISPLAY_ROWS;
 
-        // Loop through the sprite, xoring with the display bits
+        // Loop through the sprite, XORing with the display bits
         for row_offset in 0..sprite_length {
             // If off bottom of screen, stop trying to draw
             if y_pos + row_offset >= DISPLAY_ROWS {
@@ -589,7 +583,7 @@ impl<'a> Emulator<'a> {
                 .context("Trying to get byte in sprite")?
                 .to_owned();
             for col_offset in 0..SPRITE_WIDTH {
-                // Stop trying to draw if going off screen
+                // Stop trying to draw if going off-screen
                 if x_pos + col_offset >= DISPLAY_COLS {
                     break;
                 };
@@ -612,7 +606,7 @@ impl<'a> Emulator<'a> {
 
     /// Check if the `key` is currently pressed
     fn check_key(&mut self, key: u8) -> Result<bool> {
-        // If bounds check gaurunteed by the u8 passed in
+        // If bounds check guaranteed by the u8 passed in
         self.frontend.check_key(key)
     }
 
