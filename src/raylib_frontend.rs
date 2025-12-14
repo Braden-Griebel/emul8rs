@@ -47,7 +47,7 @@ const BEEP_SOUND: &[u8; 63128] = include_bytes!("../resources/sound/beep.wav");
 
 // Window size defaults
 const WINDOW_WIDTH: i32 = 640;
-const WINDOW_HEIGHT: i32 = 480;
+const WINDOW_HEIGHT: i32 = 320;
 
 /// Fontend using the Raylib library
 pub struct RaylibFrontend<'a> {
