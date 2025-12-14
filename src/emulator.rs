@@ -181,7 +181,7 @@ impl<'a> Emulator<'a> {
         let mut emulator = Self {
             memory,
             display,
-            program_counter: 0,
+            program_counter: GAME_MEMORY_START,
             index_register: 0,
             stack: [0u16; MAX_STACK_SIZE],
             stack_top: 0,
@@ -224,6 +224,18 @@ impl<'a> Emulator<'a> {
             // Sleep long enough to match the instructions per second
             thread::sleep(self.step_duration.saturating_sub(stop_time - start_time));
         }
+        // Print the display (DEBUG TODO: Remove )
+        for (idx, pixel) in self.display.iter_cells().enumerate() {
+            if idx % DISPLAY_COLS == 0 {
+                println!()
+            }
+            if *pixel {
+                print!("◼");
+            } else {
+                print!("□");
+            }
+        }
+
         Ok(())
     }
 
@@ -520,6 +532,7 @@ impl<'a> Emulator<'a> {
             .stack
             .get_mut(self.stack_top)
             .context("Stack overflow!")?) = value;
+        self.stack_top += 1;
         Ok(())
     }
 
@@ -569,6 +582,8 @@ impl<'a> Emulator<'a> {
         // The x and y coordinates are allowed to wrap
         let x_pos = x_pos % DISPLAY_COLS;
         let y_pos = y_pos % DISPLAY_ROWS;
+        // Track if any bits were turned OFF
+        let mut turned_off = false;
 
         // Loop through the sprite, XORing with the display bits
         for row_offset in 0..sprite_length {
@@ -589,17 +604,22 @@ impl<'a> Emulator<'a> {
                 };
                 // XOR the display bit with the value of the sprite at this index
                 // offset (tracked by shifting the sprite byte to the left)
-                self.display.xor(
+                if self.display.xor(
                     y_pos + row_offset,
                     x_pos + col_offset,
                     (sprite_byte & 0b10000000) == 0b10000000,
-                )?;
+                )? {
+                    turned_off = true;
+                }
                 // Shift the sprite_byte, which will result in the bit of interest being
                 // at the most significant position
                 sprite_byte <<= 1;
             }
             // Increment the memory index
             cur_index += 1;
+        }
+        if turned_off {
+            self.set_reg(0xF, 1)?;
         }
         Ok(())
     }
@@ -670,5 +690,113 @@ impl<'a> Emulator<'a> {
             .to_owned();
         self.program_counter += INSTRUCTION_LENGTH;
         Ok((b1, b2))
+    }
+}
+
+#[cfg(test)]
+mod test_emulator {
+    use super::*;
+
+    use crate::{config::EmulatorConfig, noop_frontend::NoOpFrontend};
+
+    #[test]
+    /// Test creating the emulator
+    fn test_create() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let _test_eml8r = Emulator::new(Box::new(test_frontend), test_config)?;
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test clearing the display
+    fn test_clear() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+
+        // Artifically set some cells of the display
+        test_emul8r.display.set(0, 0, true)?;
+        test_emul8r.display.set(10, 20, true)?;
+        test_emul8r.display.set(3, 5, true)?;
+
+        // Set the first instruction to be clear
+        #[allow(clippy::identity_op)]
+        {
+            test_emul8r.memory[test_emul8r.program_counter] = (0x0 << 4) | 0x0;
+            test_emul8r.memory[test_emul8r.program_counter + 1] = (0xE << 4) | 0x0;
+        }
+        // Run the single instruction
+        test_emul8r.execute()?;
+
+        // Check that the display has been cleared
+        for &cell in test_emul8r.display.iter_cells() {
+            assert!(!cell);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test the stack memory
+    fn test_stack() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+
+        // Check that the stack is empty
+        assert!(test_emul8r.stack_top == 0);
+
+        // Push some numbers onto the stack
+        test_emul8r.stack_push(5)?;
+        test_emul8r.stack_push(10)?;
+        test_emul8r.stack_push(1)?;
+        test_emul8r.stack_push(0)?;
+        test_emul8r.stack_push(50)?;
+
+        // Check that stack top has moved forward/up
+        assert_eq!(test_emul8r.stack_top, 5);
+
+        // Check popping is correct
+        assert_eq!(test_emul8r.stack_pop()?, 50);
+        assert_eq!(test_emul8r.stack_pop()?, 0);
+        assert_eq!(test_emul8r.stack_pop()?, 1);
+        assert_eq!(test_emul8r.stack_pop()?, 10);
+        assert_eq!(test_emul8r.stack_pop()?, 5);
+
+        // Make sure the stack pointer has gone back to 0
+        assert_eq!(test_emul8r.stack_top, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    /// Test jump instruction
+    fn test_jump() -> Result<()> {
+        let test_frontend = NoOpFrontend::new();
+        let test_config = EmulatorConfig::default();
+        let mut test_emul8r = Emulator::new(Box::new(test_frontend), test_config)?;
+        let jump_dest = 1012u16;
+
+        // Set the first instruction to be clear
+        #[allow(clippy::identity_op)]
+        {
+            let instruction1 = (0x1 << 4) | jump_dest >> 8;
+            let instruction2 = jump_dest & 0xFF;
+            println!("Jump dest is {:b}", jump_dest);
+            println!("Instruction1 is {:b}", instruction1);
+            println!("Instruction2 is {:b}", instruction2);
+
+            test_emul8r.memory[test_emul8r.program_counter] = instruction1 as u8;
+            test_emul8r.memory[test_emul8r.program_counter + 1] = instruction2 as u8;
+        }
+        // Run the single instruction
+        test_emul8r.execute()?;
+
+        // Check that the program counter has been set to 1012
+        assert_eq!(test_emul8r.program_counter, jump_dest as usize);
+
+        Ok(())
     }
 }
