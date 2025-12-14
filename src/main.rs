@@ -31,7 +31,6 @@ use crate::config::EmulatorConfig;
 /// and VY are used to refer to the values in the X and Y registers respectively.
 struct Cli {
     /// Path to chip8 program to load
-    #[arg(short, long, value_name = "PROGRAM")]
     program: PathBuf,
 
     /// Sets a custom configuration file
@@ -39,7 +38,7 @@ struct Cli {
     config: Option<PathBuf>,
 
     /// Turn on logging
-    #[arg(short, long)]
+    #[arg(short, long, action = clap::ArgAction::Count)]
     logging: u8,
 
     /// Foreground color (as unprefixed hexstring, e.g. FFFFFF)
