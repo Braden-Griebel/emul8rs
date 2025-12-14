@@ -9,9 +9,9 @@ use raylib::{
 
 use anyhow::{Context, Result};
 
-use crate::config;
-use crate::display::{DISPLAY_COLS, DISPLAY_ROWS, Display};
-use crate::frontend::Frontend;
+use emul8rs::config;
+use emul8rs::display::{DISPLAY_COLS, DISPLAY_ROWS, Display};
+use emul8rs::frontend::Frontend;
 // Keymap
 // mapped from
 // 1  2  3  4

@@ -53,7 +53,7 @@ const FONT: [u8; FONT_HEIGHT * FONT_CHAR_COUNT] = [
 //NOTE: For the memory, the programs will be loaded starting at address 512
 
 /// Chip8 Emulator
-pub(crate) struct Emulator<'a> {
+pub struct Emulator<'a> {
     /// Memory including program memory and ram
     memory: [u8; MEMORY_SIZE],
     /// Representation of the display (actual drawing handled in [crate::artist])

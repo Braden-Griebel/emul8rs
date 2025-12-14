@@ -1,10 +1,4 @@
-pub mod config;
-pub mod display;
-pub mod emulator;
-pub mod frontend;
 // Front end implementations
-#[cfg(test)]
-mod noop_frontend;
 #[cfg(feature = "raylib")]
 mod raylib_frontend;
 
@@ -21,7 +15,8 @@ use colog::basic_builder;
 use log::{LevelFilter, debug, info};
 
 // Internal crate uses
-use crate::config::EmulatorConfig;
+use emul8rs::config::EmulatorConfig;
+use emul8rs::emulator;
 
 // CLI struct
 #[derive(Parser)]
