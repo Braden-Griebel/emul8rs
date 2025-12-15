@@ -11,7 +11,7 @@ colog = "1.4.0"
 confy = "2.0.0"
 log = "0.4.29"
 rand = "0.9.2"
-raylib = { version = "5.5.1", features = ["wayland"], optional = true }
+raylib = { version = "5.5.1", optional = true }
 serde = { version = "1.0.228", features = ["serde_derive"] }
 
 [features]
