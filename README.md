@@ -6,6 +6,11 @@ See
 or [Wikipedia CHIP-8](https://en.wikipedia.org/wiki/CHIP-8) for more information
 about CHIP-8 and its history.
 
+This emulator is tested against
+[Timendus's chip8-test-suite](https://github.com/Timendus/chip8-test-suite), and
+passes all the testing ROMs with the exception of 2 of the quirks in the quirks
+test.
+
 ## Usage
 
 This crate includes both a library and an executable, the library is essentially
