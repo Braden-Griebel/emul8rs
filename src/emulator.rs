@@ -87,6 +87,8 @@ pub struct Emulator<'a> {
     playing_sound: bool,
     /// The length of time each instruction loop should take
     step_duration: Duration,
+    /// Whether the emulator is waiting for
+    waiting_for_key_release: Option<u8>,
 }
 
 impl<'a> Drop for Emulator<'a> {
@@ -195,6 +197,7 @@ impl<'a> Emulator<'a> {
             playing_sound: false,
             rng,
             step_duration,
+            waiting_for_key_release: None,
         };
         debug!("Loading font into emulator");
         emulator.load_font().context("Trying to load font")?;
@@ -478,24 +481,41 @@ impl<'a> Emulator<'a> {
             // BLOCKING GET KEY
             (0xF, x, 0x0, 0xA) => {
                 trace!("Blocking get key");
-                let mut key_pressed = None;
-                // Check if any of the keys are pressed
-                for key in 0x0..=0xF {
-                    if self.frontend.check_key(key)? {
-                        key_pressed = Some(key);
-                        break;
-                    }
-                }
-                match key_pressed {
+                // If waiting on a key release, check if that key has been released
+                // Otherwise, check if any key is being pressed
+                match self.waiting_for_key_release {
                     Some(key) => {
-                        // NOTE: Key is guaranteed to fit into u8 since the length of the
-                        // array is only 16
-                        self.set_reg(x.into(), key)?;
+                        // Check if key is being pressed
+                        if self.frontend.check_key(key)? {
+                            // Still waiting on release, don't step yet
+                            self.program_counter -= INSTRUCTION_LENGTH;
+                        } else {
+                            // No longer waiting for key
+                            self.waiting_for_key_release = None;
+                            // NOTE: Key is guaranteed to fit into u8 since the length of the
+                            // array is only 16
+                            self.set_reg(x.into(), key)?;
+                        }
                     }
                     None => {
-                        // Set the program counter back to the start of this instruction
-                        // to 'block' the program and wait for a key
-                        self.program_counter -= INSTRUCTION_LENGTH;
+                        let mut key_pressed = None;
+                        // Check if any of the keys are pressed
+                        for key in 0x0..=0xF {
+                            if self.frontend.check_key(key)? {
+                                key_pressed = Some(key);
+                                break;
+                            }
+                        }
+                        match key_pressed {
+                            Some(key) => {
+                                self.waiting_for_key_release = Some(key);
+                            }
+                            None => {
+                                // Set the program counter back to the start of this instruction
+                                // to 'block' the program and wait for a key
+                                self.program_counter -= INSTRUCTION_LENGTH;
+                            }
+                        }
                     }
                 }
             }

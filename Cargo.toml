@@ -16,4 +16,5 @@ serde = { version = "1.0.228", features = ["serde_derive"] }
 
 [features]
 default = ["raylib"]
+raylib-wayland = ["raylib/wayland"]
 raylib = ["dep:raylib"]
